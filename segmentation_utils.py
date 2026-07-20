@@ -43,6 +43,28 @@ def get_or_create_emission_material(name, color_rgba):
     return mat
 
 
+def get_or_create_transparent_material(name):
+    """Create a fully transparent material for ignored carrier geometry."""
+    if name in bpy.data.materials:
+        mat = bpy.data.materials[name]
+    else:
+        mat = bpy.data.materials.new(name=name)
+
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    transparent = nodes.new(type="ShaderNodeBsdfTransparent")
+    output = nodes.new(type="ShaderNodeOutputMaterial")
+    links.new(transparent.outputs["BSDF"], output.inputs["Surface"])
+
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = "DITHERED"
+
+    return mat
+
+
 # =========================================================
 # MATCH
 # =========================================================
@@ -120,6 +142,98 @@ def restore_material_assignments(scene, snapshot):
                 obj.material_slots[i].material = None
             elif saved_mat_name in bpy.data.materials:
                 obj.material_slots[i].material = bpy.data.materials[saved_mat_name]
+
+
+def iter_scene_geometry_material_sockets(scene):
+    """Yield Material input sockets in Geometry Nodes used by the scene."""
+    pending_trees = []
+    seen_tree_pointers = set()
+
+    for obj in scene.objects:
+        for modifier in obj.modifiers:
+            if modifier.type == "NODES" and modifier.node_group is not None:
+                pending_trees.append(modifier.node_group)
+
+    while pending_trees:
+        node_tree = pending_trees.pop()
+        tree_pointer = node_tree.as_pointer()
+
+        if tree_pointer in seen_tree_pointers:
+            continue
+
+        seen_tree_pointers.add(tree_pointer)
+
+        for node in node_tree.nodes:
+            nested_tree = getattr(node, "node_tree", None)
+            if nested_tree is not None:
+                pending_trees.append(nested_tree)
+
+            for input_socket in node.inputs:
+                if getattr(input_socket, "type", None) == "MATERIAL":
+                    yield node_tree, node, input_socket
+
+
+def snapshot_geometry_node_material_assignments(scene):
+    """Save direct Material references used by the scene's Geometry Nodes."""
+    return [
+        (input_socket, input_socket.default_value)
+        for _, _, input_socket in iter_scene_geometry_material_sockets(scene)
+    ]
+
+
+def restore_geometry_node_material_assignments(snapshot):
+    for input_socket, saved_material in snapshot:
+        input_socket.default_value = saved_material
+
+
+def iter_scene_geometry_modifier_material_inputs(scene):
+    """Yield Material values stored on Geometry Nodes modifiers.
+
+    Group interface inputs are stored as modifier ID properties (for example
+    ``modifier["Socket_50"]``), not as node input defaults.  When an interface
+    input is linked, this value overrides the defaults inside the node tree.
+    """
+    for obj in scene.objects:
+        for modifier in obj.modifiers:
+            if modifier.type != "NODES" or modifier.node_group is None:
+                continue
+
+            for property_name, value in modifier.items():
+                if isinstance(value, bpy.types.Material):
+                    yield obj, modifier, property_name, value
+
+
+def snapshot_geometry_modifier_material_assignments(scene):
+    """Save Material values supplied through Geometry Nodes modifiers."""
+    return [
+        (modifier, property_name, material)
+        for _, modifier, property_name, material
+        in iter_scene_geometry_modifier_material_inputs(scene)
+    ]
+
+
+def restore_geometry_modifier_material_assignments(snapshot):
+    for modifier, property_name, saved_material in snapshot:
+        modifier[property_name] = saved_material
+
+
+def restore_material_id_remaps(snapshot):
+    """Restore global material remaps in reverse application order."""
+    for original_material, replacement_material in reversed(snapshot):
+        replacement_material.user_remap(original_material)
+
+
+def update_scene_geometry_nodes(scene):
+    updated_trees = set()
+
+    for node_tree, _, _ in iter_scene_geometry_material_sockets(scene):
+        tree_pointer = node_tree.as_pointer()
+        if tree_pointer in updated_trees:
+            continue
+        node_tree.update_tag()
+        updated_trees.add(tree_pointer)
+
+    bpy.context.view_layer.update()
 
 
 # =========================================================
@@ -244,6 +358,18 @@ def apply_segmentation(seg_cfg, scene=None):
 
     # 1) salva materiali originali
     material_snapshot = snapshot_material_assignments(scene)
+    geometry_node_material_snapshot = snapshot_geometry_node_material_assignments(
+        scene
+    )
+    geometry_modifier_material_snapshot = (
+        snapshot_geometry_modifier_material_assignments(scene)
+    )
+    source_materials = [
+        material
+        for material in bpy.data.materials
+        if not material.name.startswith("EMIT_SEG__")
+    ]
+    material_id_remaps = []
 
     # 2) resetta stato object-based precedente
     reset_object_segmentation_state(scene)
@@ -260,6 +386,53 @@ def apply_segmentation(seg_cfg, scene=None):
     # tracking di ciò che è già stato matchato
     matched_object_names = set()
     matched_slots = set()  # (obj_name, slot_index)
+    matched_geometry_node_sockets = set()
+    matched_geometry_modifier_inputs = set()
+
+    # -----------------------------------------------------
+    # MATERIALI IGNORATI: decal/helper trasparenti
+    # -----------------------------------------------------
+    ignore_material_rule = seg_cfg.get("ignore_materials")
+
+    if ignore_material_rule:
+        ignored_replacement_pointers = set()
+
+        for original_mat in source_materials:
+            if not material_matches_rule(original_mat, ignore_material_rule):
+                continue
+
+            transparent_name = f"EMIT_SEG__IGNORE__SRC__{original_mat.name}"
+            transparent_mat = get_or_create_transparent_material(transparent_name)
+            original_mat.user_remap(transparent_mat)
+            material_id_remaps.append((original_mat, transparent_mat))
+            ignored_replacement_pointers.add(transparent_mat.as_pointer())
+
+        for obj in scene.objects:
+            if obj.type != "MESH":
+                continue
+
+            for slot_index, slot in enumerate(obj.material_slots):
+                if (
+                    slot.material is not None
+                    and slot.material.as_pointer() in ignored_replacement_pointers
+                ):
+                    matched_slots.add((obj.name, slot_index))
+
+        for _, _, input_socket in iter_scene_geometry_material_sockets(scene):
+            current_mat = input_socket.default_value
+            if (
+                current_mat is not None
+                and current_mat.as_pointer() in ignored_replacement_pointers
+            ):
+                matched_geometry_node_sockets.add(input_socket.as_pointer())
+
+        for _, modifier, property_name, current_mat in (
+            iter_scene_geometry_modifier_material_inputs(scene)
+        ):
+            if current_mat.as_pointer() in ignored_replacement_pointers:
+                matched_geometry_modifier_inputs.add(
+                    (modifier.as_pointer(), property_name)
+                )
 
     # -----------------------------------------------------
     # PRIMA PASSATA: OBJECT CLASSES
@@ -348,19 +521,49 @@ def apply_segmentation(seg_cfg, scene=None):
         else:
             raise ValueError(f"color.mode non supportato: {color_cfg['mode']}")
 
-        em_name = f"EMIT_SEG__MAT__{class_name}"
-        em_mat = get_or_create_emission_material(em_name, rgba)
+        replacement_pointers = set()
 
-        # sostituisce solo gli slot che matchano il materiale originale
+        # Remap globale: copre slot, Geometry Nodes, istanze e materiali
+        # incorporati nella geometria valutata. Ogni materiale originale usa
+        # un'emissione distinta per consentire un ripristino uno-a-uno.
+        for original_mat in source_materials:
+            if not material_matches_rule(original_mat, match_rule):
+                continue
+
+            em_name = f"EMIT_SEG__MAT__{class_name}__SRC__{original_mat.name}"
+            em_mat = get_or_create_emission_material(em_name, rgba)
+            original_mat.user_remap(em_mat)
+            material_id_remaps.append((original_mat, em_mat))
+            replacement_pointers.add(em_mat.as_pointer())
+
+        # Segna i riferimenti rimappati per evitare che il fallback background
+        # li sovrascriva nella terza passata.
         for obj in scene.objects:
             if obj.type != "MESH":
                 continue
 
             for slot_index, slot in enumerate(obj.material_slots):
-                original_mat = slot.material
-                if material_matches_rule(original_mat, match_rule):
-                    slot.material = em_mat
+                if (
+                    slot.material is not None
+                    and slot.material.as_pointer() in replacement_pointers
+                ):
                     matched_slots.add((obj.name, slot_index))
+
+        for _, _, input_socket in iter_scene_geometry_material_sockets(scene):
+            current_mat = input_socket.default_value
+            if (
+                current_mat is not None
+                and current_mat.as_pointer() in replacement_pointers
+            ):
+                matched_geometry_node_sockets.add(input_socket.as_pointer())
+
+        for _, modifier, property_name, current_mat in (
+            iter_scene_geometry_modifier_material_inputs(scene)
+        ):
+            if current_mat.as_pointer() in replacement_pointers:
+                matched_geometry_modifier_inputs.add(
+                    (modifier.as_pointer(), property_name)
+                )
 
     # -----------------------------------------------------
     # TERZA PASSATA: BACKGROUND FALLBACK
@@ -405,8 +608,33 @@ def apply_segmentation(seg_cfg, scene=None):
                     continue
                 slot.material = em_mat
 
+        # Applica il fallback anche ai materiali assegnati dentro Geometry Nodes.
+        for _, _, input_socket in iter_scene_geometry_material_sockets(scene):
+            if input_socket.as_pointer() in matched_geometry_node_sockets:
+                continue
+            if input_socket.default_value is None:
+                continue
+            input_socket.default_value = em_mat
+
+        # Gli input dell'interfaccia del node group sono salvati sul
+        # modificatore e prevalgono sui default dei socket interni.
+        for _, modifier, property_name, _ in (
+            iter_scene_geometry_modifier_material_inputs(scene)
+        ):
+            modifier_key = (modifier.as_pointer(), property_name)
+            if modifier_key in matched_geometry_modifier_inputs:
+                continue
+            modifier[property_name] = em_mat
+
+    update_scene_geometry_nodes(scene)
+
     return {
         "material_snapshot": material_snapshot,
+        "geometry_node_material_snapshot": geometry_node_material_snapshot,
+        "geometry_modifier_material_snapshot": (
+            geometry_modifier_material_snapshot
+        ),
+        "material_id_remaps": material_id_remaps,
         "instance_metadata": instance_metadata
     }
 

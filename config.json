@@ -5,17 +5,35 @@
   "output_folder": "C:\\Users\\pasquale\\Desktop\\progetto_cosmos\\output",
   "render_engine": "BLENDER_EEVEE_NEXT",
   "render_depthmap": true,
+  "depth_normalization": {
+    "mode": "auto",
+    "near": 15.0,
+    "far": 110.0,
+    "gamma": 0.65,
+    "near_percentile": 1.0,
+    "far_percentile": 99.0,
+    "sample_frames": 24,
+    "sample_width": 64,
+    "sample_height": 36
+  },
   "segmentation": {
     "cosmos_seg_control": {
+      "ignore_materials": {
+        "material_name_contains": [
+          "DecalsStain"
+        ]
+      },
       "classes": {
         "car": {
           "mode": "object",
           "class_id": 1,
           "match": {
             "object_name_contains": [
-              "body",
-              "wheel",
-              "car"
+              "low poly car",
+              "parking car",
+              "car body",
+              "car front wheels",
+              "car back wheels"
             ]
           },
           "color": {
@@ -31,7 +49,8 @@
           "mode": "material",
           "match": {
             "material_name_exact": [
-              "CityGen_Streets"
+              "CityGen_Streets",
+              "CityGen_lanes_secondary_color"
             ]
           },
           "color": {
@@ -122,45 +141,22 @@
       }
     },
     "car_masks": {
+      "ignore_materials": {
+        "material_name_contains": [
+          "DecalsStain"
+        ]
+      },
       "classes": {
         "car": {
           "mode": "object",
           "class_id": 1,
           "match": {
             "object_name_contains": [
-              "body",
-              "wheel",
-              "car"
-            ]
-          },
-          "color": {
-            "mode": "fixed",
-            "value": [
-              255,
-              255,
-              255
-            ]
-          }
-        },
-        "background": {
-          "color": {
-            "mode": "fixed",
-            "value": [
-              0,
-              0,
-              0
-            ]
-          }
-        }
-      }
-    },
-    "stripes_mask": {
-      "classes": {
-        "lanes": {
-          "mode": "material",
-          "match": {
-            "material_name_exact": [
-              "CityGen_lanes_white"
+              "low poly car",
+              "parking car",
+              "car body",
+              "car front wheels",
+              "car back wheels"
             ]
           },
           "color": {

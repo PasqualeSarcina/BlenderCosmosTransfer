@@ -36,6 +36,9 @@ CONFIG_SCHEMA = {
             "type": "boolean",
             "default": False
         },
+        "depth_normalization": {
+            "$ref": "#/$defs/depth_normalization"
+        },
         "segmentation": {
             "type": "object",
             "minProperties": 1,
@@ -46,6 +49,52 @@ CONFIG_SCHEMA = {
     },
 
     "$defs": {
+
+        # ---------------- DEPTH ----------------
+        "depth_normalization": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["auto", "fixed"]
+                },
+                "near": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "far": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "gamma": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "near_percentile": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                },
+                "far_percentile": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                },
+                "sample_frames": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "sample_width": {
+                    "type": "integer",
+                    "minimum": 2
+                },
+                "sample_height": {
+                    "type": "integer",
+                    "minimum": 2
+                }
+            },
+            "additionalProperties": False
+        },
 
         # ---------------- COLOR ----------------
         "color_rule": {
@@ -179,6 +228,9 @@ CONFIG_SCHEMA = {
                 "save_yolo_seg_labels": {
                     "type": "boolean",
                     "default": False
+                },
+                "ignore_materials": {
+                    "$ref": "#/$defs/material_match"
                 },
                 "classes": {
                     "type": "object",
