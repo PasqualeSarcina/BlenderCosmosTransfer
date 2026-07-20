@@ -1,0 +1,188 @@
+{
+  "blender_exe_path": "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe",
+  "n_frames": 1,
+  "blend_input_file": "C:\\Users\\pasquale\\Desktop\\progetto_cosmos\\data\\city.blend",
+  "output_folder": "C:\\Users\\pasquale\\Desktop\\progetto_cosmos\\output",
+  "render_engine": "BLENDER_EEVEE_NEXT",
+  "render_depthmap": true,
+  "segmentation": {
+    "cosmos_seg_control": {
+      "classes": {
+        "car": {
+          "mode": "object",
+          "class_id": 1,
+          "match": {
+            "object_name_contains": [
+              "body",
+              "wheel",
+              "car"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        "asphalt": {
+          "mode": "material",
+          "match": {
+            "material_name_exact": [
+              "CityGen_Streets"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              123,
+              63,
+              123
+            ]
+          }
+        },
+        "lanes": {
+          "mode": "material",
+          "match": {
+            "material_name_exact": [
+              "CityGen_lanes_white"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              124,
+              211,
+              68
+            ]
+          }
+        },
+        "walks": {
+          "mode": "material",
+          "match": {
+            "material_name_exact": [
+              "CityGenside walks"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              239,
+              38,
+              227
+            ]
+          }
+        },
+        "lamp": {
+          "mode": "object",
+          "class_id": 2,
+          "match": {
+            "object_name_contains": [
+              "Lamp"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              147,
+              150,
+              148
+            ]
+          }
+        },
+        "tree": {
+          "mode": "object",
+          "class_id": 3,
+          "match": {
+            "object_name_contains": [
+              "MR."
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              104,
+              138,
+              38
+            ]
+          }
+        },
+        "background": {
+          "color": {
+            "mode": "fixed",
+            "value": [
+              68,
+              71,
+              67
+            ]
+          }
+        }
+      }
+    },
+    "car_masks": {
+      "classes": {
+        "car": {
+          "mode": "object",
+          "class_id": 1,
+          "match": {
+            "object_name_contains": [
+              "body",
+              "wheel",
+              "car"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              255,
+              255,
+              255
+            ]
+          }
+        },
+        "background": {
+          "color": {
+            "mode": "fixed",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      }
+    },
+    "stripes_mask": {
+      "classes": {
+        "lanes": {
+          "mode": "material",
+          "match": {
+            "material_name_exact": [
+              "CityGen_lanes_white"
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "value": [
+              255,
+              255,
+              255
+            ]
+          }
+        },
+        "background": {
+          "color": {
+            "mode": "fixed",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      }
+    }
+  }
+}
