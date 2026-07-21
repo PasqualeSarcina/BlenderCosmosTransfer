@@ -225,12 +225,23 @@ def _update_baked_box(box_state, depsgraph, padding):
 
     try:
         bounds = _mesh_component_bounds(evaluated_mesh)
+        if not bounds:
+            if not box_state.get("warned_empty", False):
+                print(
+                    f"ATTENZIONE: mesh baked '{source.name}' vuota nel "
+                    "depsgraph; mantengo l'ultimo parallelepipedo valido."
+                )
+                box_state["warned_empty"] = True
+            return 0
+
         vertices, faces = _box_mesh_geometry(bounds, padding)
         box_mesh.clear_geometry()
         box_mesh.from_pydata(vertices, [], faces)
         box_mesh.update()
         box_object.matrix_world = evaluated_object.matrix_world.copy()
-        box_object.hide_render = not bool(faces)
+        box_object.hide_render = False
+        box_state["warned_empty"] = False
+        return len(bounds)
     finally:
         evaluated_object.to_mesh_clear()
 
@@ -336,10 +347,8 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                 "source": source,
                 "box_object": box_object,
                 "box_mesh": box_mesh,
+                "warned_empty": False,
             })
-
-        for source in source_objects:
-            source.hide_render = True
 
         def update_boxes(_scene, depsgraph=None):
             current_depsgraph = (
@@ -347,16 +356,26 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                 if depsgraph is not None
                 else bpy.context.evaluated_depsgraph_get()
             )
+            counts = {}
             for box_state in change["box_states"]:
-                _update_baked_box(
+                counts[box_state["source"].name] = _update_baked_box(
                     box_state,
                     current_depsgraph,
                     padding,
                 )
+            return counts
+
+        # Calcola i box mentre le mesh sorgenti sono ancora renderizzabili.
+        # Alcuni bake restituiscono geometria vuota dopo hide_render=True.
+        initial_counts = update_boxes(bpy.context.scene)
+        for source_name, count in initial_counts.items():
+            print(f"WSM baked: '{source_name}' -> {count} parallelepipedi")
+
+        for source in source_objects:
+            source.hide_render = True
 
         change["handler"] = update_boxes
         bpy.app.handlers.frame_change_post.append(update_boxes)
-        update_boxes(bpy.context.scene)
 
     except Exception:
         _cleanup_baked_boxes(change)
