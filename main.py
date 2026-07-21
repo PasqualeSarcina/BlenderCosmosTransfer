@@ -300,7 +300,7 @@ def main():
 
     cam2world = add_random_street_camera(
         city_plane=city_plane,
-        seed=2,  #1,2
+        seed=4,  #1,2
     )
 
     if cam2world is None:

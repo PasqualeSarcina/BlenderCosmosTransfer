@@ -16,6 +16,16 @@ from segmentation_utils import (
 DEFAULT_NODE_GROUP_NAME = "City_Generator_2.0"
 DEFAULT_CAR_COLLECTION_NAMES = {"car model"}
 DEFAULT_CAR_OBJECT_NAMES = {"parking car", "Low poly car "}
+DEFAULT_GENERATOR_OBJECT_NAME = "City_Generator_2.0_Object"
+DEFAULT_BAKED_TRAFFIC_COLLECTION_NAMES = {"Traffic_Baked"}
+DEFAULT_BAKED_CAR_OBJECT_NAMES = {
+    "body",
+    "front",
+    "back",
+    "parked body",
+    "parked front",
+    "parked back",
+}
 
 
 def iter_nested_node_trees(root_tree):
@@ -71,6 +81,107 @@ def is_car_source_node(
     return False
 
 
+def _find_generator_node_group(node_group_name, wsm_config):
+    root_tree = bpy.data.node_groups.get(node_group_name)
+    if root_tree is not None:
+        return root_tree
+
+    generator_object_name = wsm_config.get(
+        "generator_object_name",
+        DEFAULT_GENERATOR_OBJECT_NAME,
+    )
+    generator_object = bpy.data.objects.get(generator_object_name)
+    if generator_object is None:
+        return None
+
+    for modifier in generator_object.modifiers:
+        if modifier.type != "NODES":
+            continue
+        if modifier.node_group is not None:
+            print(
+                f"Node group '{node_group_name}' non trovato; "
+                f"uso '{modifier.node_group.name}' dal modificatore "
+                f"'{modifier.name}'."
+            )
+            return modifier.node_group
+
+    return None
+
+
+def _matches_blender_name(name, expected_names):
+    name_lower = name.casefold()
+    return any(
+        name_lower == expected.casefold()
+        or name_lower.startswith(f"{expected.casefold()}.")
+        for expected in expected_names
+    )
+
+
+def _enable_baked_car_material(car_material, wsm_config):
+    collection_names = set(
+        wsm_config.get(
+            "baked_traffic_collection_names",
+            DEFAULT_BAKED_TRAFFIC_COLLECTION_NAMES,
+        )
+    )
+    object_names = set(
+        wsm_config.get(
+            "baked_car_object_names",
+            DEFAULT_BAKED_CAR_OBJECT_NAMES,
+        )
+    )
+
+    collections = [
+        collection for collection in bpy.data.collections
+        if _matches_blender_name(collection.name, collection_names)
+    ]
+    if not collections:
+        return []
+
+    changes = []
+    visited_objects = set()
+
+    try:
+        for collection in collections:
+            for obj in collection.all_objects:
+                if obj.type != "MESH":
+                    continue
+                if not _matches_blender_name(obj.name, object_names):
+                    continue
+                if obj.as_pointer() in visited_objects:
+                    continue
+
+                visited_objects.add(obj.as_pointer())
+                previous_materials = [
+                    slot.material for slot in obj.material_slots
+                ]
+
+                if obj.material_slots:
+                    for slot in obj.material_slots:
+                        slot.material = car_material
+                else:
+                    obj.data.materials.append(car_material)
+
+                changes.append({
+                    "kind": "baked_material",
+                    "object": obj,
+                    "previous_materials": previous_materials,
+                })
+
+    except Exception:
+        disable_car_bounding_boxes(changes)
+        raise
+
+    if changes:
+        print(
+            "Geometry Nodes del generatore non disponibile: "
+            f"materiale WSM applicato a {len(changes)} mesh "
+            "della collection Traffic_Baked."
+        )
+
+    return changes
+
+
 def _normalize_color(color):
     values = [float(value) for value in color]
     if len(values) != 3:
@@ -101,11 +212,22 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
         )
     )
 
-    root_tree = bpy.data.node_groups.get(node_group_name)
+    root_tree = _find_generator_node_group(
+        node_group_name,
+        wsm_config,
+    )
 
     if root_tree is None:
+        changes = _enable_baked_car_material(
+            car_material,
+            wsm_config,
+        )
+        if changes:
+            bpy.context.view_layer.update()
+            return changes
         raise RuntimeError(
-            f"Node group '{node_group_name}' non trovato"
+            f"Node group '{node_group_name}' non trovato e nessuna "
+            "mesh auto compatibile trovata nelle collection baked"
         )
 
     changes = []
@@ -193,6 +315,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
 
                     changes.append({
+                        "kind": "geometry_nodes",
                         "tree": tree,
                         "source_socket": source_socket,
                         "target_socket": target_socket,
@@ -202,9 +325,15 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     })
 
         if not changes:
-            raise RuntimeError(
-                "Nessun ramo Geometry Nodes delle car e' stato trovato"
+            changes = _enable_baked_car_material(
+                car_material,
+                wsm_config,
             )
+            if not changes:
+                raise RuntimeError(
+                    "Nessun ramo Geometry Nodes delle car e nessuna "
+                    "mesh auto baked sono stati trovati"
+                )
 
     except Exception:
         disable_car_bounding_boxes(changes)
@@ -217,6 +346,20 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
 
 def disable_car_bounding_boxes(changes):
     for change in reversed(changes):
+        if change.get("kind") == "baked_material":
+            obj = change["object"]
+            previous_materials = change["previous_materials"]
+
+            if previous_materials:
+                for slot, material in zip(
+                    obj.material_slots,
+                    previous_materials,
+                ):
+                    slot.material = material
+            else:
+                obj.data.materials.clear()
+            continue
+
         tree = change["tree"]
 
         # Rimuovendo i nodi vengono rimossi anche i relativi collegamenti
