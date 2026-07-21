@@ -281,6 +281,10 @@ CONFIG_SCHEMA = {
                     "type": "string",
                     "minLength": 1
                 },
+                "generator_object_name": {
+                    "type": "string",
+                    "minLength": 1
+                },
                 "car_collection_names": {
                     "type": "array",
                     "items": {"type": "string"}
@@ -288,6 +292,35 @@ CONFIG_SCHEMA = {
                 "car_object_names": {
                     "type": "array",
                     "items": {"type": "string"}
+                },
+                "baked_traffic_collection_names": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "baked_car_object_names": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "baked_car_body_names": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "baked_bbox_padding": {
+                    "oneOf": [
+                        {
+                            "type": "number",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "array",
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "items": {
+                                "type": "number",
+                                "minimum": 0
+                            }
+                        }
+                    ]
                 },
                 "ignore_materials": {
                     "$ref": "#/$defs/material_match"
