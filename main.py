@@ -26,6 +26,48 @@ from segmentation_utils import (
 from wsm_utils import enter_wsm_mode, exit_wsm_mode
 
 
+def configure_render_output(
+    scene,
+    output_dir,
+    run_index,
+    n_frames,
+    video_crf="PERC_LOSSLESS",
+):
+    """Configure a maximum-quality JPEG for one frame, otherwise an MP4."""
+    single_frame = n_frames == 1
+    extension = "jpg" if single_frame else "mp4"
+
+    scene.render.filepath = os.path.join(
+        output_dir,
+        f"run_{run_index:03d}.{extension}",
+    )
+    scene.render.image_settings.color_mode = "RGB"
+
+    if single_frame:
+        scene.render.image_settings.file_format = "JPEG"
+        scene.render.image_settings.quality = 100
+    else:
+        scene.render.image_settings.file_format = "FFMPEG"
+        scene.render.ffmpeg.format = "MPEG4"
+        scene.render.ffmpeg.codec = "H264"
+        scene.render.ffmpeg.constant_rate_factor = video_crf
+        scene.render.ffmpeg.ffmpeg_preset = "BEST"
+        scene.render.ffmpeg.gopsize = 1
+        scene.render.ffmpeg.use_max_b_frames = False
+
+    return scene.render.filepath
+
+
+def render_configured_output(scene, n_frames):
+    """Render a still image for one frame, otherwise the full animation."""
+    scene.frame_set(scene.frame_start)
+
+    if n_frames == 1:
+        bpy.ops.render.render(write_still=True)
+    else:
+        bpy.ops.render.render(animation=True)
+
+
 def estimate_dynamic_depth_range(scene, camera, depth_cfg):
     """Estimate one robust depth range for the whole clip without image files."""
     sample_width = int(depth_cfg.get("sample_width", 64))
@@ -254,13 +296,6 @@ def main():
     scene.frame_start = 1
     scene.frame_end = config["n_frames"]
 
-    scene.render.image_settings.file_format = "FFMPEG"
-    scene.render.ffmpeg.format = "MPEG4"
-    scene.render.ffmpeg.codec = "H264"
-    scene.render.ffmpeg.constant_rate_factor = "PERC_LOSSLESS"
-    scene.render.ffmpeg.ffmpeg_preset = "BEST"
-    scene.render.ffmpeg.gopsize = 1
-    scene.render.ffmpeg.use_max_b_frames = False
     scene.render.fps = 25
     scene.render.resolution_x = 1280
     scene.render.resolution_y = 720
@@ -314,16 +349,18 @@ def main():
     links = tree.links
 
     # -------------------------------------------------
-    # RENDER RGB MP4
+    # RENDER RGB
     # -------------------------------------------------
     rgb_dir = os.path.abspath(
         os.path.join(config["output_folder"], "rgb")
     )
     os.makedirs(rgb_dir, exist_ok=True)
 
-    scene.render.filepath = os.path.join(
+    configure_render_output(
+        scene,
         rgb_dir,
-        f"run_{run_index:03d}.mp4"
+        run_index,
+        config["n_frames"],
     )
 
     nodes.clear()
@@ -334,10 +371,10 @@ def main():
     comp_node = nodes.new(type="CompositorNodeComposite")
     links.new(rl.outputs["Image"], comp_node.inputs["Image"])
 
-    bpy.ops.render.render(animation=True)
+    render_configured_output(scene, config["n_frames"])
 
     # -------------------------------------------------
-    # RENDER WORLD SCENARIO MAP MP4
+    # RENDER WORLD SCENARIO MAP
     # -------------------------------------------------
     if config.get("render_wsm", False):
         wsm_config = config.get("wsm")
@@ -368,22 +405,15 @@ def main():
             comp_node = nodes.new(type="CompositorNodeComposite")
             links.new(rl.outputs["Image"], comp_node.inputs["Image"])
 
-            scene.frame_set(scene.frame_start)
-            scene.render.image_settings.file_format = "FFMPEG"
-            scene.render.image_settings.color_mode = "RGB"
-            scene.render.ffmpeg.format = "MPEG4"
-            scene.render.ffmpeg.codec = "H264"
-            scene.render.ffmpeg.constant_rate_factor = "PERC_LOSSLESS"
-            scene.render.ffmpeg.ffmpeg_preset = "BEST"
-            scene.render.ffmpeg.gopsize = 1
-            scene.render.ffmpeg.use_max_b_frames = False
-            scene.render.filepath = os.path.join(
+            configure_render_output(
+                scene,
                 wsm_dir,
-                f"run_{run_index:03d}.mp4",
+                run_index,
+                config["n_frames"],
             )
 
             print("Rendering WSM:", scene.render.filepath)
-            bpy.ops.render.render(animation=True)
+            render_configured_output(scene, config["n_frames"])
 
         finally:
             if wsm_state is not None:
@@ -399,14 +429,14 @@ def main():
             scene.frame_set(wsm_render_state["frame"])
 
     # -------------------------------------------------
-    # RENDER DEPTH DIRETTAMENTE IN MP4
+    # RENDER DEPTH
     # -------------------------------------------------
     if config.get("render_depthmap", False):
-        depth_mp4_dir = os.path.abspath(
+        depth_dir = os.path.abspath(
             os.path.join(config["output_folder"], "depth")
         )
 
-        os.makedirs(depth_mp4_dir, exist_ok=True)
+        os.makedirs(depth_dir, exist_ok=True)
 
         depth_cfg = config.get("depth_normalization", {})
         depth_gamma = float(depth_cfg.get("gamma", 0.65))
@@ -464,23 +494,15 @@ def main():
             gamma=depth_gamma,
         )
 
-        depth_mp4_path = os.path.join(
-            depth_mp4_dir,
-            f"run_{run_index:03d}.mp4"
-        )
-
-        scene.render.filepath = depth_mp4_path
-
         previous_crf = scene.render.ffmpeg.constant_rate_factor
 
-        scene.render.image_settings.file_format = "FFMPEG"
-        scene.render.ffmpeg.format = "MPEG4"
-        scene.render.image_settings.color_mode = "RGB"
-        scene.render.ffmpeg.codec = "H264"
-        scene.render.ffmpeg.constant_rate_factor = "LOSSLESS"
-        scene.render.ffmpeg.ffmpeg_preset = "BEST"
-        scene.render.ffmpeg.gopsize = 1
-        scene.render.ffmpeg.use_max_b_frames = False
+        configure_render_output(
+            scene,
+            depth_dir,
+            run_index,
+            config["n_frames"],
+            video_crf="LOSSLESS",
+        )
         scene.render.fps = 25
 
         color_state = {
@@ -491,7 +513,7 @@ def main():
         }
 
         print(
-            "Rendering DEPTH MP4 diretto "
+            "Rendering DEPTH "
             f"(inverse depth, near={depth_near}, far={depth_far}, "
             f"gamma={depth_gamma})..."
         )
@@ -502,8 +524,7 @@ def main():
             scene.view_settings.exposure = 0.0
             scene.view_settings.gamma = 1.0
             scene.render.use_sequencer = False
-            scene.frame_set(scene.frame_start)
-            bpy.ops.render.render(animation=True)
+            render_configured_output(scene, config["n_frames"])
         finally:
             scene.view_settings.view_transform = color_state["view_transform"]
             scene.view_settings.look = color_state["look"]
@@ -514,7 +535,7 @@ def main():
         scene.render.use_compositing = True
 
     # -------------------------------------------------
-    # RENDER SEGMENTAZIONI MP4
+    # RENDER SEGMENTAZIONI
     # -------------------------------------------------
     if config.get("segmentation") is not None:
         for seg_name, seg_cfg in config["segmentation"].items():
@@ -524,9 +545,11 @@ def main():
             )
             os.makedirs(seg_dir, exist_ok=True)
 
-            scene.render.filepath = os.path.join(
+            configure_render_output(
+                scene,
                 seg_dir,
-                f"run_{run_index:03d}.mp4"
+                run_index,
+                config["n_frames"],
             )
 
             seg_render_state = enter_fast_segmentation_render_mode(scene)
@@ -541,7 +564,7 @@ def main():
                 comp_node = nodes.new(type="CompositorNodeComposite")
                 links.new(rl.outputs["Image"], comp_node.inputs["Image"])
 
-                bpy.ops.render.render(animation=True)
+                render_configured_output(scene, config["n_frames"])
 
             finally:
                 restore_material_assignments(scene, result["material_snapshot"])
