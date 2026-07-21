@@ -23,6 +23,7 @@ from segmentation_utils import (
     enter_fast_segmentation_render_mode,
     exit_fast_segmentation_render_mode,
 )
+from wsm_utils import enter_wsm_mode, exit_wsm_mode
 
 
 def estimate_dynamic_depth_range(scene, camera, depth_cfg):
@@ -261,8 +262,8 @@ def main():
     scene.render.ffmpeg.gopsize = 1
     scene.render.ffmpeg.use_max_b_frames = False
     scene.render.fps = 25
-    scene.render.resolution_x = 1920
-    scene.render.resolution_y = 1080
+    scene.render.resolution_x = 1280
+    scene.render.resolution_y = 720
     scene.render.resolution_percentage = 100
     scene.render.use_sequencer = False
 
@@ -299,7 +300,7 @@ def main():
 
     cam2world = add_random_street_camera(
         city_plane=city_plane,
-        seed=1,  #1,2
+        seed=2,  #1,2
     )
 
     if cam2world is None:
@@ -334,6 +335,68 @@ def main():
     links.new(rl.outputs["Image"], comp_node.inputs["Image"])
 
     bpy.ops.render.render(animation=True)
+
+    # -------------------------------------------------
+    # RENDER WORLD SCENARIO MAP MP4
+    # -------------------------------------------------
+    if config.get("render_wsm", False):
+        wsm_config = config.get("wsm")
+        if wsm_config is None:
+            raise ValueError(
+                "render_wsm e' true ma la sezione 'wsm' non esiste"
+            )
+
+        wsm_dir = os.path.abspath(
+            os.path.join(config["output_folder"], "wsm")
+        )
+        os.makedirs(wsm_dir, exist_ok=True)
+
+        wsm_render_state = {
+            "filepath": scene.render.filepath,
+            "file_format": scene.render.image_settings.file_format,
+            "color_mode": scene.render.image_settings.color_mode,
+            "frame": scene.frame_current,
+        }
+        wsm_state = None
+
+        try:
+            wsm_state = enter_wsm_mode(scene, wsm_config)
+
+            nodes.clear()
+            rl = nodes.new(type="CompositorNodeRLayers")
+            rl.layer = bpy.context.view_layer.name
+            comp_node = nodes.new(type="CompositorNodeComposite")
+            links.new(rl.outputs["Image"], comp_node.inputs["Image"])
+
+            scene.frame_set(scene.frame_start)
+            scene.render.image_settings.file_format = "FFMPEG"
+            scene.render.image_settings.color_mode = "RGB"
+            scene.render.ffmpeg.format = "MPEG4"
+            scene.render.ffmpeg.codec = "H264"
+            scene.render.ffmpeg.constant_rate_factor = "PERC_LOSSLESS"
+            scene.render.ffmpeg.ffmpeg_preset = "BEST"
+            scene.render.ffmpeg.gopsize = 1
+            scene.render.ffmpeg.use_max_b_frames = False
+            scene.render.filepath = os.path.join(
+                wsm_dir,
+                f"run_{run_index:03d}.mp4",
+            )
+
+            print("Rendering WSM:", scene.render.filepath)
+            bpy.ops.render.render(animation=True)
+
+        finally:
+            if wsm_state is not None:
+                exit_wsm_mode(scene, wsm_state)
+
+            scene.render.filepath = wsm_render_state["filepath"]
+            scene.render.image_settings.file_format = (
+                wsm_render_state["file_format"]
+            )
+            scene.render.image_settings.color_mode = (
+                wsm_render_state["color_mode"]
+            )
+            scene.frame_set(wsm_render_state["frame"])
 
     # -------------------------------------------------
     # RENDER DEPTH DIRETTAMENTE IN MP4
@@ -497,5 +560,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

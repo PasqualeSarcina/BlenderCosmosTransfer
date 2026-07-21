@@ -4,6 +4,79 @@
   "blend_input_file": "C:\\Users\\pasquale\\Desktop\\progetto_cosmos\\data\\city.blend",
   "output_folder": "C:\\Users\\pasquale\\Desktop\\progetto_cosmos\\output",
   "render_engine": "BLENDER_EEVEE_NEXT",
+  "render_wsm": true,
+  "wsm": {
+    "car_color": [
+      20,
+      116,
+      194
+    ],
+    "ignore_materials": {
+      "material_name_contains": [
+        "DecalsStain"
+      ]
+    },
+    "classes": {
+      "lanes_white": {
+        "mode": "material",
+        "match": {
+          "material_name_exact": [
+            "CityGen_lanes_white"
+          ]
+        },
+        "color": {
+          "mode": "fixed",
+          "value": [
+            240,
+            240,
+            240
+          ]
+        }
+      },
+      "lanes_secondary": {
+        "mode": "material",
+        "match": {
+          "material_name_exact": [
+            "CityGen_lanes_secondary_color"
+          ]
+        },
+        "color": {
+          "mode": "fixed",
+          "value": [
+            235,
+            213,
+            70
+          ]
+        }
+      },
+      "curbs": {
+        "mode": "material",
+        "match": {
+          "material_name_exact": [
+            "CityGen_Curb"
+          ]
+        },
+        "color": {
+          "mode": "fixed",
+          "value": [
+            235,
+            49,
+            190
+          ]
+        }
+      },
+      "background": {
+        "color": {
+          "mode": "fixed",
+          "value": [
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    }
+  },
   "render_depthmap": true,
   "depth_normalization": {
     "mode": "auto",

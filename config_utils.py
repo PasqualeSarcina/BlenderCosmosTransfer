@@ -36,6 +36,13 @@ CONFIG_SCHEMA = {
             "type": "boolean",
             "default": False
         },
+        "render_wsm": {
+            "type": "boolean",
+            "default": False
+        },
+        "wsm": {
+            "$ref": "#/$defs/wsm_block"
+        },
         "depth_normalization": {
             "$ref": "#/$defs/depth_normalization"
         },
@@ -228,6 +235,55 @@ CONFIG_SCHEMA = {
                 "save_yolo_seg_labels": {
                     "type": "boolean",
                     "default": False
+                },
+                "ignore_materials": {
+                    "$ref": "#/$defs/material_match"
+                },
+                "classes": {
+                    "type": "object",
+                    "required": ["background"],
+                    "properties": {
+                        "background": {
+                            "type": "object",
+                            "required": ["color"],
+                            "properties": {
+                                "color": {
+                                    "$ref": "#/$defs/color_rule"
+                                }
+                            },
+                            "additionalProperties": False
+                        }
+                    },
+                    "additionalProperties": {
+                        "$ref": "#/$defs/class_rule"
+                    }
+                }
+            },
+            "additionalProperties": False
+        },
+
+        # ---------------- WSM BLOCK ----------------
+        "wsm_block": {
+            "type": "object",
+            "required": ["classes"],
+            "properties": {
+                "car_color": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": {"type": "number"}
+                },
+                "node_group_name": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "car_collection_names": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "car_object_names": {
+                    "type": "array",
+                    "items": {"type": "string"}
                 },
                 "ignore_materials": {
                     "$ref": "#/$defs/material_match"
