@@ -118,6 +118,19 @@ def _matches_blender_name(name, expected_names):
     )
 
 
+def _iter_collection_tree(root_collection):
+    pending = list(root_collection.children)
+    visited = set()
+
+    while pending:
+        collection = pending.pop()
+        if collection.as_pointer() in visited:
+            continue
+        visited.add(collection.as_pointer())
+        yield collection
+        pending.extend(collection.children)
+
+
 def _mesh_component_bounds(mesh):
     vertex_count = len(mesh.vertices)
     if vertex_count == 0:
@@ -299,21 +312,64 @@ def _enable_baked_car_boxes(car_material, wsm_config):
 
     source_objects = []
     body_objects = []
-    visited_objects = set()
+    parked_body_pointers = set()
+    visited_source_objects = set()
+    visited_body_objects = set()
 
-    for collection in collections:
-        for obj in collection.all_objects:
+    def add_source_objects(source_collection):
+        for obj in source_collection.all_objects:
             if obj.type != "MESH":
                 continue
-            if not _matches_blender_name(obj.name, object_names):
+            pointer = obj.as_pointer()
+            if pointer in visited_source_objects:
                 continue
-            if obj.as_pointer() in visited_objects:
-                continue
-
-            visited_objects.add(obj.as_pointer())
+            visited_source_objects.add(pointer)
             source_objects.append(obj)
-            if _matches_blender_name(obj.name, body_names):
+
+    def add_body_objects(body_collection):
+        is_parked = _matches_blender_name(
+            body_collection.name,
+            {"parked body"},
+        )
+        for obj in body_collection.all_objects:
+            if obj.type != "MESH":
+                continue
+            pointer = obj.as_pointer()
+            if pointer not in visited_body_objects:
+                visited_body_objects.add(pointer)
                 body_objects.append(obj)
+            if is_parked:
+                parked_body_pointers.add(pointer)
+
+    # Nella scena baked mostrata, body/front/back sono sottocollection e
+    # contengono le singole mesh. Manteniamo anche il fallback per file in cui
+    # gli stessi nomi appartengono direttamente agli oggetti.
+    matched_subcollections = []
+    for traffic_collection in collections:
+        for nested_collection in _iter_collection_tree(traffic_collection):
+            if _matches_blender_name(nested_collection.name, object_names):
+                matched_subcollections.append(nested_collection)
+                add_source_objects(nested_collection)
+                if _matches_blender_name(nested_collection.name, body_names):
+                    add_body_objects(nested_collection)
+
+    if not matched_subcollections:
+        for collection in collections:
+            for obj in collection.all_objects:
+                if obj.type != "MESH":
+                    continue
+                if not _matches_blender_name(obj.name, object_names):
+                    continue
+                pointer = obj.as_pointer()
+                if pointer not in visited_source_objects:
+                    visited_source_objects.add(pointer)
+                    source_objects.append(obj)
+                if _matches_blender_name(obj.name, body_names):
+                    if pointer not in visited_body_objects:
+                        visited_body_objects.add(pointer)
+                        body_objects.append(obj)
+                    if _matches_blender_name(obj.name, {"parked body"}):
+                        parked_body_pointers.add(pointer)
 
     if not source_objects:
         return []
@@ -348,6 +404,9 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                 "box_object": box_object,
                 "box_mesh": box_mesh,
                 "warned_empty": False,
+                "is_parked": (
+                    source.as_pointer() in parked_body_pointers
+                ),
             })
 
         def update_boxes(_scene, depsgraph=None):
@@ -356,20 +415,34 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                 if depsgraph is not None
                 else bpy.context.evaluated_depsgraph_get()
             )
-            counts = {}
+            counts = []
             for box_state in change["box_states"]:
-                counts[box_state["source"].name] = _update_baked_box(
+                counts.append((
                     box_state,
-                    current_depsgraph,
-                    padding,
-                )
+                    _update_baked_box(
+                        box_state,
+                        current_depsgraph,
+                        padding,
+                    ),
+                ))
             return counts
 
         # Calcola i box mentre le mesh sorgenti sono ancora renderizzabili.
         # Alcuni bake restituiscono geometria vuota dopo hide_render=True.
         initial_counts = update_boxes(bpy.context.scene)
-        for source_name, count in initial_counts.items():
-            print(f"WSM baked: '{source_name}' -> {count} parallelepipedi")
+        moving_box_count = sum(
+            count for state, count in initial_counts
+            if not state["is_parked"]
+        )
+        parked_box_count = sum(
+            count for state, count in initial_counts
+            if state["is_parked"]
+        )
+        print(
+            "WSM baked: "
+            f"{moving_box_count} parallelepipedi in 'body', "
+            f"{parked_box_count} in 'parked body'."
+        )
 
         for source in source_objects:
             source.hide_render = True

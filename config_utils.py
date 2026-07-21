@@ -155,6 +155,10 @@ CONFIG_SCHEMA = {
                 "object_name_contains": {
                     "type": "array",
                     "items": {"type": "string"}
+                },
+                "collection_name_exact": {
+                    "type": "array",
+                    "items": {"type": "string"}
                 }
             },
             "additionalProperties": False

@@ -74,12 +74,25 @@ def object_matches_rule(obj, match_rule):
 
     exacts = [x.lower() for x in match_rule.get("object_name_exact", [])]
     contains = [x.lower() for x in match_rule.get("object_name_contains", [])]
+    collection_exacts = [
+        x.lower() for x in match_rule.get("collection_name_exact", [])
+    ]
 
     if exacts and name in exacts:
         return True
 
     if contains and any(token in name for token in contains):
         return True
+
+    if collection_exacts:
+        for collection in obj.users_collection:
+            collection_name = collection.name.lower()
+            if any(
+                collection_name == expected
+                or collection_name.startswith(f"{expected}.")
+                for expected in collection_exacts
+            ):
+                return True
 
     return False
 
