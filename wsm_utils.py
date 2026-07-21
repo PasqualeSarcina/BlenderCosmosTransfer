@@ -26,6 +26,7 @@ DEFAULT_BAKED_CAR_OBJECT_NAMES = {
     "parked front",
     "parked back",
 }
+DEFAULT_BAKED_CAR_BODY_NAMES = {"body", "parked body"}
 
 
 def iter_nested_node_trees(root_tree):
@@ -117,7 +118,145 @@ def _matches_blender_name(name, expected_names):
     )
 
 
-def _enable_baked_car_material(car_material, wsm_config):
+def _mesh_component_bounds(mesh):
+    vertex_count = len(mesh.vertices)
+    if vertex_count == 0:
+        return []
+
+    parents = list(range(vertex_count))
+    used_vertices = set()
+
+    def find(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(first, second):
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parents[second_root] = first_root
+
+    for edge in mesh.edges:
+        first, second = edge.vertices
+        used_vertices.update((first, second))
+        union(first, second)
+
+    if not used_vertices:
+        used_vertices.update(range(vertex_count))
+
+    components = {}
+    for vertex_index in used_vertices:
+        components.setdefault(find(vertex_index), []).append(vertex_index)
+
+    bounds = []
+    for indices in components.values():
+        coordinates = [mesh.vertices[index].co for index in indices]
+        minimum = coordinates[0].copy()
+        maximum = coordinates[0].copy()
+        for coordinate in coordinates[1:]:
+            minimum.x = min(minimum.x, coordinate.x)
+            minimum.y = min(minimum.y, coordinate.y)
+            minimum.z = min(minimum.z, coordinate.z)
+            maximum.x = max(maximum.x, coordinate.x)
+            maximum.y = max(maximum.y, coordinate.y)
+            maximum.z = max(maximum.z, coordinate.z)
+        bounds.append((minimum, maximum))
+
+    return bounds
+
+
+def _box_mesh_geometry(bounds, padding):
+    vertices = []
+    faces = []
+
+    for minimum, maximum in bounds:
+        min_x = minimum.x - padding[0]
+        min_y = minimum.y - padding[1]
+        min_z = minimum.z - padding[2]
+        max_x = maximum.x + padding[0]
+        max_y = maximum.y + padding[1]
+        max_z = maximum.z + padding[2]
+        offset = len(vertices)
+
+        vertices.extend([
+            (min_x, min_y, min_z),
+            (max_x, min_y, min_z),
+            (max_x, max_y, min_z),
+            (min_x, max_y, min_z),
+            (min_x, min_y, max_z),
+            (max_x, min_y, max_z),
+            (max_x, max_y, max_z),
+            (min_x, max_y, max_z),
+        ])
+        faces.extend([
+            (offset + 0, offset + 3, offset + 2, offset + 1),
+            (offset + 4, offset + 5, offset + 6, offset + 7),
+            (offset + 0, offset + 1, offset + 5, offset + 4),
+            (offset + 1, offset + 2, offset + 6, offset + 5),
+            (offset + 2, offset + 3, offset + 7, offset + 6),
+            (offset + 3, offset + 0, offset + 4, offset + 7),
+        ])
+
+    return vertices, faces
+
+
+def _normalize_bbox_padding(value):
+    if isinstance(value, (int, float)):
+        padding = (float(value),) * 3
+    else:
+        padding = tuple(float(item) for item in value)
+        if len(padding) != 3:
+            raise ValueError(
+                "wsm.baked_bbox_padding deve essere un numero o [x, y, z]"
+            )
+    if any(item < 0.0 for item in padding):
+        raise ValueError("wsm.baked_bbox_padding non puo' essere negativo")
+    return padding
+
+
+def _update_baked_box(box_state, depsgraph, padding):
+    source = box_state["source"]
+    box_object = box_state["box_object"]
+    box_mesh = box_state["box_mesh"]
+    evaluated_object = source.evaluated_get(depsgraph)
+    evaluated_mesh = evaluated_object.to_mesh()
+
+    try:
+        bounds = _mesh_component_bounds(evaluated_mesh)
+        vertices, faces = _box_mesh_geometry(bounds, padding)
+        box_mesh.clear_geometry()
+        box_mesh.from_pydata(vertices, [], faces)
+        box_mesh.update()
+        box_object.matrix_world = evaluated_object.matrix_world.copy()
+        box_object.hide_render = not bool(faces)
+    finally:
+        evaluated_object.to_mesh_clear()
+
+
+def _cleanup_baked_boxes(change):
+    handler = change.get("handler")
+    if handler in bpy.app.handlers.frame_change_post:
+        bpy.app.handlers.frame_change_post.remove(handler)
+
+    for obj, previous_hide_render in change.get("source_states", []):
+        obj.hide_render = previous_hide_render
+
+    for box_state in change.get("box_states", []):
+        box_object = box_state["box_object"]
+        box_mesh = box_state["box_mesh"]
+        if box_object.name in bpy.data.objects:
+            bpy.data.objects.remove(box_object, do_unlink=True)
+        if box_mesh.name in bpy.data.meshes:
+            bpy.data.meshes.remove(box_mesh)
+
+    collection = change.get("collection")
+    if collection is not None and collection.name in bpy.data.collections:
+        bpy.data.collections.remove(collection)
+
+
+def _enable_baked_car_boxes(car_material, wsm_config):
     collection_names = set(
         wsm_config.get(
             "baked_traffic_collection_names",
@@ -130,6 +269,15 @@ def _enable_baked_car_material(car_material, wsm_config):
             DEFAULT_BAKED_CAR_OBJECT_NAMES,
         )
     )
+    body_names = set(
+        wsm_config.get(
+            "baked_car_body_names",
+            DEFAULT_BAKED_CAR_BODY_NAMES,
+        )
+    )
+    padding = _normalize_bbox_padding(
+        wsm_config.get("baked_bbox_padding", [0.0, 0.0, 0.0])
+    )
 
     collections = [
         collection for collection in bpy.data.collections
@@ -138,48 +286,88 @@ def _enable_baked_car_material(car_material, wsm_config):
     if not collections:
         return []
 
-    changes = []
+    source_objects = []
+    body_objects = []
     visited_objects = set()
 
+    for collection in collections:
+        for obj in collection.all_objects:
+            if obj.type != "MESH":
+                continue
+            if not _matches_blender_name(obj.name, object_names):
+                continue
+            if obj.as_pointer() in visited_objects:
+                continue
+
+            visited_objects.add(obj.as_pointer())
+            source_objects.append(obj)
+            if _matches_blender_name(obj.name, body_names):
+                body_objects.append(obj)
+
+    if not source_objects:
+        return []
+    if not body_objects:
+        body_objects = source_objects
+
+    temporary_collection = bpy.data.collections.new(
+        "WSM_Baked_Car_Boxes"
+    )
+    bpy.context.scene.collection.children.link(temporary_collection)
+    change = {
+        "kind": "baked_boxes",
+        "collection": temporary_collection,
+        "source_states": [
+            (obj, obj.hide_render) for obj in source_objects
+        ],
+        "box_states": [],
+        "handler": None,
+    }
+
     try:
-        for collection in collections:
-            for obj in collection.all_objects:
-                if obj.type != "MESH":
-                    continue
-                if not _matches_blender_name(obj.name, object_names):
-                    continue
-                if obj.as_pointer() in visited_objects:
-                    continue
+        for source in body_objects:
+            box_mesh = bpy.data.meshes.new(f"WSM_Box_{source.name}")
+            box_mesh.materials.append(car_material)
+            box_object = bpy.data.objects.new(
+                f"WSM_Box_{source.name}",
+                box_mesh,
+            )
+            temporary_collection.objects.link(box_object)
+            change["box_states"].append({
+                "source": source,
+                "box_object": box_object,
+                "box_mesh": box_mesh,
+            })
 
-                visited_objects.add(obj.as_pointer())
-                previous_materials = [
-                    slot.material for slot in obj.material_slots
-                ]
+        for source in source_objects:
+            source.hide_render = True
 
-                if obj.material_slots:
-                    for slot in obj.material_slots:
-                        slot.material = car_material
-                else:
-                    obj.data.materials.append(car_material)
+        def update_boxes(_scene, depsgraph=None):
+            current_depsgraph = (
+                depsgraph
+                if depsgraph is not None
+                else bpy.context.evaluated_depsgraph_get()
+            )
+            for box_state in change["box_states"]:
+                _update_baked_box(
+                    box_state,
+                    current_depsgraph,
+                    padding,
+                )
 
-                changes.append({
-                    "kind": "baked_material",
-                    "object": obj,
-                    "previous_materials": previous_materials,
-                })
+        change["handler"] = update_boxes
+        bpy.app.handlers.frame_change_post.append(update_boxes)
+        update_boxes(bpy.context.scene)
 
     except Exception:
-        disable_car_bounding_boxes(changes)
+        _cleanup_baked_boxes(change)
         raise
 
-    if changes:
-        print(
-            "Geometry Nodes del generatore non disponibile: "
-            f"materiale WSM applicato a {len(changes)} mesh "
-            "della collection Traffic_Baked."
-        )
-
-    return changes
+    print(
+        "Geometry Nodes del generatore non disponibile: "
+        f"creati parallelepipedi WSM per {len(body_objects)} mesh body "
+        f"e nascoste {len(source_objects)} mesh auto baked."
+    )
+    return [change]
 
 
 def _normalize_color(color):
@@ -218,7 +406,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
     )
 
     if root_tree is None:
-        changes = _enable_baked_car_material(
+        changes = _enable_baked_car_boxes(
             car_material,
             wsm_config,
         )
@@ -325,7 +513,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     })
 
         if not changes:
-            changes = _enable_baked_car_material(
+            changes = _enable_baked_car_boxes(
                 car_material,
                 wsm_config,
             )
@@ -346,18 +534,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
 
 def disable_car_bounding_boxes(changes):
     for change in reversed(changes):
-        if change.get("kind") == "baked_material":
-            obj = change["object"]
-            previous_materials = change["previous_materials"]
-
-            if previous_materials:
-                for slot, material in zip(
-                    obj.material_slots,
-                    previous_materials,
-                ):
-                    slot.material = material
-            else:
-                obj.data.materials.clear()
+        if change.get("kind") == "baked_boxes":
+            _cleanup_baked_boxes(change)
             continue
 
         tree = change["tree"]
