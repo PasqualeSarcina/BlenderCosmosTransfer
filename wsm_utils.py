@@ -131,53 +131,23 @@ def _iter_collection_tree(root_collection):
         pending.extend(collection.children)
 
 
-def _mesh_component_bounds(mesh):
-    vertex_count = len(mesh.vertices)
-    if vertex_count == 0:
-        return []
+def _mesh_bounds(mesh):
+    if len(mesh.vertices) == 0:
+        return None
 
-    parents = list(range(vertex_count))
-    used_vertices = set()
+    minimum = mesh.vertices[0].co.copy()
+    maximum = minimum.copy()
 
-    def find(index):
-        while parents[index] != index:
-            parents[index] = parents[parents[index]]
-            index = parents[index]
-        return index
+    for vertex in mesh.vertices[1:]:
+        coordinate = vertex.co
+        minimum.x = min(minimum.x, coordinate.x)
+        minimum.y = min(minimum.y, coordinate.y)
+        minimum.z = min(minimum.z, coordinate.z)
+        maximum.x = max(maximum.x, coordinate.x)
+        maximum.y = max(maximum.y, coordinate.y)
+        maximum.z = max(maximum.z, coordinate.z)
 
-    def union(first, second):
-        first_root = find(first)
-        second_root = find(second)
-        if first_root != second_root:
-            parents[second_root] = first_root
-
-    for edge in mesh.edges:
-        first, second = edge.vertices
-        used_vertices.update((first, second))
-        union(first, second)
-
-    if not used_vertices:
-        used_vertices.update(range(vertex_count))
-
-    components = {}
-    for vertex_index in used_vertices:
-        components.setdefault(find(vertex_index), []).append(vertex_index)
-
-    bounds = []
-    for indices in components.values():
-        coordinates = [mesh.vertices[index].co for index in indices]
-        minimum = coordinates[0].copy()
-        maximum = coordinates[0].copy()
-        for coordinate in coordinates[1:]:
-            minimum.x = min(minimum.x, coordinate.x)
-            minimum.y = min(minimum.y, coordinate.y)
-            minimum.z = min(minimum.z, coordinate.z)
-            maximum.x = max(maximum.x, coordinate.x)
-            maximum.y = max(maximum.y, coordinate.y)
-            maximum.z = max(maximum.z, coordinate.z)
-        bounds.append((minimum, maximum))
-
-    return bounds
+    return minimum, maximum
 
 
 def _box_mesh_geometry(bounds, padding):
@@ -237,8 +207,8 @@ def _update_baked_box(box_state, depsgraph, padding):
     evaluated_mesh = evaluated_object.to_mesh()
 
     try:
-        bounds = _mesh_component_bounds(evaluated_mesh)
-        if not bounds:
+        bounds = _mesh_bounds(evaluated_mesh)
+        if bounds is None:
             if not box_state.get("warned_empty", False):
                 print(
                     f"ATTENZIONE: mesh baked '{source.name}' vuota nel "
@@ -247,14 +217,14 @@ def _update_baked_box(box_state, depsgraph, padding):
                 box_state["warned_empty"] = True
             return 0
 
-        vertices, faces = _box_mesh_geometry(bounds, padding)
+        vertices, faces = _box_mesh_geometry([bounds], padding)
         box_mesh.clear_geometry()
         box_mesh.from_pydata(vertices, [], faces)
         box_mesh.update()
         box_object.matrix_world = evaluated_object.matrix_world.copy()
         box_object.hide_render = False
         box_state["warned_empty"] = False
-        return len(bounds)
+        return 1
     finally:
         evaluated_object.to_mesh_clear()
 
@@ -410,25 +380,41 @@ def _enable_baked_car_boxes(car_material, wsm_config):
             })
 
         def update_boxes(_scene, depsgraph=None):
-            current_depsgraph = (
-                depsgraph
-                if depsgraph is not None
-                else bpy.context.evaluated_depsgraph_get()
-            )
-            counts = []
-            for box_state in change["box_states"]:
-                counts.append((
-                    box_state,
-                    _update_baked_box(
-                        box_state,
-                        current_depsgraph,
-                        padding,
-                    ),
-                ))
-            return counts
 
-        # Calcola i box mentre le mesh sorgenti sono ancora renderizzabili.
-        # Alcuni bake restituiscono geometria vuota dopo hide_render=True.
+            hidden_sources = [
+                source for source in source_objects if source.hide_render
+            ]
+            try:
+                if hidden_sources:
+                    for source in hidden_sources:
+                        source.hide_render = False
+                    bpy.context.view_layer.update()
+                    current_depsgraph = bpy.context.evaluated_depsgraph_get()
+                else:
+                    current_depsgraph = (
+                        depsgraph
+                        if depsgraph is not None
+                        else bpy.context.evaluated_depsgraph_get()
+                    )
+
+                counts = []
+                for box_state in change["box_states"]:
+                    counts.append((
+                        box_state,
+                        _update_baked_box(
+                            box_state,
+                            current_depsgraph,
+                            padding,
+                        ),
+                    ))
+                return counts
+            finally:
+                for source in hidden_sources:
+                    source.hide_render = True
+                if hidden_sources:
+                    bpy.context.view_layer.update()
+
+
         initial_counts = update_boxes(bpy.context.scene)
         moving_box_count = sum(
             count for state, count in initial_counts
