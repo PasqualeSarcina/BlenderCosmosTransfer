@@ -4,7 +4,6 @@ from segmentation_utils import (
     apply_segmentation,
     enter_fast_segmentation_render_mode,
     exit_fast_segmentation_render_mode,
-    get_or_create_emission_material,
     reset_object_segmentation_state,
     restore_geometry_modifier_material_assignments,
     restore_geometry_node_material_assignments,
@@ -27,6 +26,15 @@ DEFAULT_BAKED_CAR_OBJECT_NAMES = {
     "parked back",
 }
 DEFAULT_BAKED_CAR_BODY_NAMES = {"body", "parked body"}
+WSM_CAR_GRADIENT_ATTRIBUTE = "wsm_car_longitudinal_gradient"
+DEFAULT_NVIDIA_CAR_FRONT_COLOR = [0, 46, 136]
+DEFAULT_NVIDIA_CAR_REAR_COLOR = [126, 206, 255]
+DEFAULT_NVIDIA_EDGE_COLOR = [200, 200, 200]
+BOX_EDGE_INDICES = (
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
+)
 
 
 def iter_nested_node_trees(root_tree):
@@ -185,6 +193,56 @@ def _box_mesh_geometry(bounds, padding):
     return vertices, faces
 
 
+def _set_box_gradient_attribute(mesh):
+    attribute = mesh.attributes.get(WSM_CAR_GRADIENT_ATTRIBUTE)
+    if attribute is not None and (
+        attribute.data_type != "FLOAT" or attribute.domain != "POINT"
+    ):
+        mesh.attributes.remove(attribute)
+        attribute = None
+
+    if attribute is None:
+        attribute = mesh.attributes.new(
+            name=WSM_CAR_GRADIENT_ATTRIBUTE,
+            type="FLOAT",
+            domain="POINT",
+        )
+
+    if len(mesh.vertices) == 0:
+        return
+
+    min_x = min(vertex.co.x for vertex in mesh.vertices)
+    max_x = max(vertex.co.x for vertex in mesh.vertices)
+    x_range = max_x - min_x
+
+    for vertex, value in zip(mesh.vertices, attribute.data):
+        value.value = (
+            (vertex.co.x - min_x) / x_range
+            if x_range > 0.0
+            else 0.0
+        )
+
+
+def _update_box_edge_curve(curve, vertices, edge_radius):
+    while len(curve.splines) > 0:
+        curve.splines.remove(curve.splines[0])
+
+    for first_index, second_index in BOX_EDGE_INDICES:
+        spline = curve.splines.new(type="POLY")
+        spline.points.add(1)
+        first = vertices[first_index]
+        second = vertices[second_index]
+        spline.points[0].co = (*first, 1.0)
+        spline.points[1].co = (*second, 1.0)
+
+    curve.dimensions = "3D"
+    curve.resolution_u = 1
+    curve.bevel_depth = edge_radius
+    curve.bevel_resolution = 0
+    curve.resolution_v = 0
+    curve.use_fill_caps = True
+
+
 def _normalize_bbox_padding(value):
     if isinstance(value, (int, float)):
         padding = (float(value),) * 3
@@ -199,10 +257,12 @@ def _normalize_bbox_padding(value):
     return padding
 
 
-def _update_baked_box(box_state, depsgraph, padding):
+def _update_baked_box(box_state, depsgraph, padding, edge_radius):
     source = box_state["source"]
     box_object = box_state["box_object"]
     box_mesh = box_state["box_mesh"]
+    edge_object = box_state["edge_object"]
+    edge_curve = box_state["edge_curve"]
     evaluated_object = source.evaluated_get(depsgraph)
     evaluated_mesh = evaluated_object.to_mesh()
 
@@ -221,8 +281,12 @@ def _update_baked_box(box_state, depsgraph, padding):
         box_mesh.clear_geometry()
         box_mesh.from_pydata(vertices, [], faces)
         box_mesh.update()
+        _set_box_gradient_attribute(box_mesh)
+        _update_box_edge_curve(edge_curve, vertices, edge_radius)
         box_object.matrix_world = evaluated_object.matrix_world.copy()
+        edge_object.matrix_world = evaluated_object.matrix_world.copy()
         box_object.hide_render = False
+        edge_object.hide_render = False
         box_state["warned_empty"] = False
         return 1
     finally:
@@ -240,10 +304,16 @@ def _cleanup_baked_boxes(change):
     for box_state in change.get("box_states", []):
         box_object = box_state["box_object"]
         box_mesh = box_state["box_mesh"]
+        edge_object = box_state["edge_object"]
+        edge_curve = box_state["edge_curve"]
         if box_object.name in bpy.data.objects:
             bpy.data.objects.remove(box_object, do_unlink=True)
+        if edge_object.name in bpy.data.objects:
+            bpy.data.objects.remove(edge_object, do_unlink=True)
         if box_mesh.name in bpy.data.meshes:
             bpy.data.meshes.remove(box_mesh)
+        if edge_curve.name in bpy.data.curves:
+            bpy.data.curves.remove(edge_curve)
 
     collection = change.get("collection")
     if collection is not None and collection.name in bpy.data.collections:
@@ -251,6 +321,8 @@ def _cleanup_baked_boxes(change):
 
 
 def _enable_baked_car_boxes(car_material, wsm_config):
+    edge_material = _get_or_create_nvidia_edge_material(wsm_config)
+    edge_radius = 0.025
     collection_names = set(
         wsm_config.get(
             "baked_traffic_collection_names",
@@ -369,10 +441,24 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                 box_mesh,
             )
             temporary_collection.objects.link(box_object)
+
+            edge_curve = bpy.data.curves.new(
+                f"WSM_Box_Edges_{source.name}",
+                type="CURVE",
+            )
+            edge_curve.materials.append(edge_material)
+            edge_object = bpy.data.objects.new(
+                f"WSM_Box_Edges_{source.name}",
+                edge_curve,
+            )
+            temporary_collection.objects.link(edge_object)
+
             change["box_states"].append({
                 "source": source,
                 "box_object": box_object,
                 "box_mesh": box_mesh,
+                "edge_object": edge_object,
+                "edge_curve": edge_curve,
                 "warned_empty": False,
                 "is_parked": (
                     source.as_pointer() in parked_body_pointers
@@ -405,6 +491,7 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                             box_state,
                             current_depsgraph,
                             padding,
+                            edge_radius,
                         ),
                     ))
                 return counts
@@ -459,6 +546,121 @@ def _normalize_color(color):
     return (*values, 1.0)
 
 
+def _get_or_create_nvidia_car_material(wsm_config):
+    front_color = _normalize_color(
+        wsm_config.get(
+            "car_front_color",
+            DEFAULT_NVIDIA_CAR_FRONT_COLOR,
+        )
+    )
+    rear_color = _normalize_color(
+        wsm_config.get(
+            "car_rear_color",
+            DEFAULT_NVIDIA_CAR_REAR_COLOR,
+        )
+    )
+    material_name = "EMIT_SEG__WSM_CAR_NVIDIA"
+    material = bpy.data.materials.get(material_name)
+    if material is None:
+        material = bpy.data.materials.new(name=material_name)
+
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    gradient_attribute = nodes.new(type="ShaderNodeAttribute")
+    gradient_attribute.name = "WSM_Car_Longitudinal_Gradient"
+    gradient_attribute.attribute_name = WSM_CAR_GRADIENT_ATTRIBUTE
+
+    face_gradient = nodes.new(type="ShaderNodeMixRGB")
+    face_gradient.name = "WSM_Car_NVIDIA_Gradient"
+    face_gradient.blend_type = "MIX"
+    face_gradient.inputs[1].default_value = rear_color
+    face_gradient.inputs[2].default_value = front_color
+
+    camera_data = nodes.new(type="ShaderNodeCameraData")
+    camera_data.name = "WSM_Car_Camera_Depth"
+
+    depth_fade = nodes.new(type="ShaderNodeMapRange")
+    depth_fade.name = "WSM_Car_NVIDIA_Depth_Fade"
+    depth_fade.clamp = True
+    depth_fade.inputs[1].default_value = 0.0
+    depth_fade.inputs[2].default_value = 200.0
+    depth_fade.inputs[3].default_value = 1.0
+    depth_fade.inputs[4].default_value = 0.0
+
+    face_with_depth = nodes.new(type="ShaderNodeMixRGB")
+    face_with_depth.name = "WSM_Car_Face_Depth"
+    face_with_depth.blend_type = "MULTIPLY"
+    face_with_depth.inputs[0].default_value = 1.0
+
+    emission = nodes.new(type="ShaderNodeEmission")
+    emission.name = "WSM_Car_NVIDIA_Emission"
+    emission.inputs[1].default_value = 1.0
+
+    output = nodes.new(type="ShaderNodeOutputMaterial")
+    output.name = "WSM_Car_NVIDIA_Output"
+
+    links.new(gradient_attribute.outputs["Fac"], face_gradient.inputs[0])
+    links.new(camera_data.outputs["View Z Depth"], depth_fade.inputs[0])
+    links.new(face_gradient.outputs[0], face_with_depth.inputs[1])
+    links.new(depth_fade.outputs[0], face_with_depth.inputs[2])
+    links.new(face_with_depth.outputs[0], emission.inputs[0])
+    links.new(emission.outputs[0], output.inputs[0])
+
+    return material
+
+
+def _get_or_create_nvidia_edge_material(wsm_config):
+    edge_color = _normalize_color(
+        wsm_config.get(
+            "car_edge_color",
+            DEFAULT_NVIDIA_EDGE_COLOR,
+        )
+    )
+    material_name = "EMIT_SEG__WSM_CAR_NVIDIA_EDGES"
+    material = bpy.data.materials.get(material_name)
+    if material is None:
+        material = bpy.data.materials.new(name=material_name)
+
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    camera_data = nodes.new(type="ShaderNodeCameraData")
+    camera_data.name = "WSM_Car_Edge_Camera_Depth"
+
+    depth_fade = nodes.new(type="ShaderNodeMapRange")
+    depth_fade.name = "WSM_Car_Edge_Depth_Fade"
+    depth_fade.clamp = True
+    depth_fade.inputs[1].default_value = 0.0
+    depth_fade.inputs[2].default_value = 200.0
+    depth_fade.inputs[3].default_value = 1.0
+    depth_fade.inputs[4].default_value = 0.0
+
+    edge_with_depth = nodes.new(type="ShaderNodeMixRGB")
+    edge_with_depth.name = "WSM_Car_NVIDIA_Edge_Color"
+    edge_with_depth.blend_type = "MULTIPLY"
+    edge_with_depth.inputs[0].default_value = 1.0
+    edge_with_depth.inputs[1].default_value = edge_color
+
+    emission = nodes.new(type="ShaderNodeEmission")
+    emission.name = "WSM_Car_NVIDIA_Edge_Emission"
+    emission.inputs[1].default_value = 1.0
+
+    output = nodes.new(type="ShaderNodeOutputMaterial")
+    output.name = "WSM_Car_NVIDIA_Edge_Output"
+
+    links.new(camera_data.outputs["View Z Depth"], depth_fade.inputs[0])
+    links.new(depth_fade.outputs[0], edge_with_depth.inputs[2])
+    links.new(edge_with_depth.outputs[0], emission.inputs[0])
+    links.new(emission.outputs[0], output.inputs[0])
+
+    return material
+
+
 def enable_car_bounding_boxes(car_material, wsm_config=None):
     wsm_config = wsm_config or {}
     node_group_name = wsm_config.get(
@@ -496,6 +698,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
             "mesh auto compatibile trovata nelle collection baked"
         )
 
+    edge_material = _get_or_create_nvidia_edge_material(wsm_config)
+    edge_radius = 0.025
     changes = []
 
     try:
@@ -550,13 +754,82 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     if use_radius is not None:
                         use_radius.default_value = False
 
+                    position = tree.nodes.new(
+                        "GeometryNodeInputPosition"
+                    )
+                    position.name = "WSM_Car_Position"
+
+                    separate_position = tree.nodes.new(
+                        "ShaderNodeSeparateXYZ"
+                    )
+                    separate_position.name = "WSM_Car_Position_X"
+
+                    separate_minimum = tree.nodes.new(
+                        "ShaderNodeSeparateXYZ"
+                    )
+                    separate_minimum.name = "WSM_Car_Minimum_X"
+
+                    separate_maximum = tree.nodes.new(
+                        "ShaderNodeSeparateXYZ"
+                    )
+                    separate_maximum.name = "WSM_Car_Maximum_X"
+
+                    gradient = tree.nodes.new("ShaderNodeMapRange")
+                    gradient.name = "WSM_Car_Longitudinal_Gradient"
+                    gradient.clamp = True
+                    gradient.inputs["To Min"].default_value = 0.0
+                    gradient.inputs["To Max"].default_value = 1.0
+
+                    store_gradient = tree.nodes.new(
+                        "GeometryNodeStoreNamedAttribute"
+                    )
+                    store_gradient.name = "WSM_Car_Store_Gradient"
+                    store_gradient.data_type = "FLOAT"
+                    store_gradient.domain = "POINT"
+                    store_gradient.inputs["Name"].default_value = (
+                        WSM_CAR_GRADIENT_ATTRIBUTE
+                    )
+
+                    mesh_to_curve = tree.nodes.new(
+                        "GeometryNodeMeshToCurve"
+                    )
+                    mesh_to_curve.name = "WSM_Car_Box_Edges"
+
+                    edge_profile = tree.nodes.new(
+                        "GeometryNodeCurvePrimitiveCircle"
+                    )
+                    edge_profile.name = "WSM_Car_Edge_Profile"
+                    edge_profile.mode = "RADIUS"
+                    edge_profile.inputs["Resolution"].default_value = 4
+                    edge_profile.inputs["Radius"].default_value = (
+                        edge_radius
+                    )
+
+                    curve_to_mesh = tree.nodes.new(
+                        "GeometryNodeCurveToMesh"
+                    )
+                    curve_to_mesh.name = "WSM_Car_Edge_Geometry"
+
+                    set_edge_material = tree.nodes.new(
+                        "GeometryNodeSetMaterial"
+                    )
+                    set_edge_material.name = "WSM_Car_Edge_Material"
+                    set_edge_material.inputs["Material"].default_value = (
+                        edge_material
+                    )
+
+                    join_geometry = tree.nodes.new(
+                        "GeometryNodeJoinGeometry"
+                    )
+                    join_geometry.name = "WSM_Car_Faces_And_Edges"
+
                     set_material = tree.nodes.new(
                         "GeometryNodeSetMaterial"
                     )
                     set_material.name = "WSM_Car_Set_Material"
                     set_material.label = "WSM: car material"
                     set_material.location = (
-                        source_node.location.x + 660,
+                        source_node.location.x + 880,
                         source_node.location.y,
                     )
                     set_material.inputs["Material"].default_value = (
@@ -572,11 +845,67 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         bounding_box.inputs["Geometry"],
                     )
                     tree.links.new(
+                        position.outputs["Position"],
+                        separate_position.inputs["Vector"],
+                    )
+                    tree.links.new(
+                        bounding_box.outputs["Min"],
+                        separate_minimum.inputs["Vector"],
+                    )
+                    tree.links.new(
+                        bounding_box.outputs["Max"],
+                        separate_maximum.inputs["Vector"],
+                    )
+                    tree.links.new(
+                        separate_position.outputs["X"],
+                        gradient.inputs["Value"],
+                    )
+                    tree.links.new(
+                        separate_minimum.outputs["X"],
+                        gradient.inputs["From Min"],
+                    )
+                    tree.links.new(
+                        separate_maximum.outputs["X"],
+                        gradient.inputs["From Max"],
+                    )
+                    tree.links.new(
                         bounding_box.outputs["Bounding Box"],
+                        store_gradient.inputs["Geometry"],
+                    )
+                    tree.links.new(
+                        gradient.outputs["Result"],
+                        store_gradient.inputs["Value"],
+                    )
+                    tree.links.new(
+                        store_gradient.outputs["Geometry"],
                         set_material.inputs["Geometry"],
                     )
                     tree.links.new(
+                        bounding_box.outputs["Bounding Box"],
+                        mesh_to_curve.inputs["Mesh"],
+                    )
+                    tree.links.new(
+                        mesh_to_curve.outputs["Curve"],
+                        curve_to_mesh.inputs["Curve"],
+                    )
+                    tree.links.new(
+                        edge_profile.outputs["Curve"],
+                        curve_to_mesh.inputs["Profile Curve"],
+                    )
+                    tree.links.new(
+                        curve_to_mesh.outputs["Mesh"],
+                        set_edge_material.inputs["Geometry"],
+                    )
+                    tree.links.new(
                         set_material.outputs["Geometry"],
+                        join_geometry.inputs["Geometry"],
+                    )
+                    tree.links.new(
+                        set_edge_material.outputs["Geometry"],
+                        join_geometry.inputs["Geometry"],
+                    )
+                    tree.links.new(
+                        join_geometry.outputs["Geometry"],
                         target_socket,
                     )
 
@@ -587,6 +916,17 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         "target_socket": target_socket,
                         "realize": realize,
                         "bounding_box": bounding_box,
+                        "position": position,
+                        "separate_position": separate_position,
+                        "separate_minimum": separate_minimum,
+                        "separate_maximum": separate_maximum,
+                        "gradient": gradient,
+                        "store_gradient": store_gradient,
+                        "mesh_to_curve": mesh_to_curve,
+                        "edge_profile": edge_profile,
+                        "curve_to_mesh": curve_to_mesh,
+                        "set_edge_material": set_edge_material,
+                        "join_geometry": join_geometry,
                         "set_material": set_material,
                     })
 
@@ -619,7 +959,18 @@ def disable_car_bounding_boxes(changes):
         tree = change["tree"]
 
         # Rimuovendo i nodi vengono rimossi anche i relativi collegamenti
+        tree.nodes.remove(change["join_geometry"])
+        tree.nodes.remove(change["set_edge_material"])
+        tree.nodes.remove(change["curve_to_mesh"])
+        tree.nodes.remove(change["edge_profile"])
+        tree.nodes.remove(change["mesh_to_curve"])
         tree.nodes.remove(change["set_material"])
+        tree.nodes.remove(change["store_gradient"])
+        tree.nodes.remove(change["gradient"])
+        tree.nodes.remove(change["separate_maximum"])
+        tree.nodes.remove(change["separate_minimum"])
+        tree.nodes.remove(change["separate_position"])
+        tree.nodes.remove(change["position"])
         tree.nodes.remove(change["bounding_box"])
         tree.nodes.remove(change["realize"])
 
@@ -668,12 +1019,7 @@ def enter_wsm_mode(scene, wsm_config):
         # mantengono colorati corsie, segnaletica e bordi del marciapiede.
         segmentation_result = apply_segmentation(wsm_config, scene)
 
-        car_material = get_or_create_emission_material(
-            "EMIT_SEG__WSM_CAR",
-            _normalize_color(
-                wsm_config.get("car_color", [20, 116, 194])
-            ),
-        )
+        car_material = _get_or_create_nvidia_car_material(wsm_config)
         car_changes = enable_car_bounding_boxes(
             car_material,
             wsm_config,
