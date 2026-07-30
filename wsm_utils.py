@@ -211,14 +211,14 @@ def _set_box_gradient_attribute(mesh):
     if len(mesh.vertices) == 0:
         return
 
-    min_x = min(vertex.co.x for vertex in mesh.vertices)
-    max_x = max(vertex.co.x for vertex in mesh.vertices)
-    x_range = max_x - min_x
+    min_y = min(vertex.co.y for vertex in mesh.vertices)
+    max_y = max(vertex.co.y for vertex in mesh.vertices)
+    y_range = max_y - min_y
 
     for vertex, value in zip(mesh.vertices, attribute.data):
         value.value = (
-            (vertex.co.x - min_x) / x_range
-            if x_range > 0.0
+            (max_y - vertex.co.y) / y_range
+            if y_range > 0.0
             else 0.0
         )
 
@@ -762,23 +762,23 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     separate_position = tree.nodes.new(
                         "ShaderNodeSeparateXYZ"
                     )
-                    separate_position.name = "WSM_Car_Position_X"
+                    separate_position.name = "WSM_Car_Position_Y"
 
                     separate_minimum = tree.nodes.new(
                         "ShaderNodeSeparateXYZ"
                     )
-                    separate_minimum.name = "WSM_Car_Minimum_X"
+                    separate_minimum.name = "WSM_Car_Minimum_Y"
 
                     separate_maximum = tree.nodes.new(
                         "ShaderNodeSeparateXYZ"
                     )
-                    separate_maximum.name = "WSM_Car_Maximum_X"
+                    separate_maximum.name = "WSM_Car_Maximum_Y"
 
                     gradient = tree.nodes.new("ShaderNodeMapRange")
                     gradient.name = "WSM_Car_Longitudinal_Gradient"
                     gradient.clamp = True
-                    gradient.inputs["To Min"].default_value = 0.0
-                    gradient.inputs["To Max"].default_value = 1.0
+                    gradient.inputs["To Min"].default_value = 1.0
+                    gradient.inputs["To Max"].default_value = 0.0
 
                     store_gradient = tree.nodes.new(
                         "GeometryNodeStoreNamedAttribute"
@@ -857,15 +857,15 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         separate_maximum.inputs["Vector"],
                     )
                     tree.links.new(
-                        separate_position.outputs["X"],
+                        separate_position.outputs["Y"],
                         gradient.inputs["Value"],
                     )
                     tree.links.new(
-                        separate_minimum.outputs["X"],
+                        separate_minimum.outputs["Y"],
                         gradient.inputs["From Min"],
                     )
                     tree.links.new(
-                        separate_maximum.outputs["X"],
+                        separate_maximum.outputs["Y"],
                         gradient.inputs["From Max"],
                     )
                     tree.links.new(
