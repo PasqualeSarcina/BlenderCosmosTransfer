@@ -4,6 +4,8 @@ import math
 import os
 import sys
 
+from node_seg import apply_citygen_geometry_overrides, restore_citygen_geometry_overrides
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.append(script_dir)
@@ -553,7 +555,11 @@ def main():
             )
 
             seg_render_state = enter_fast_segmentation_render_mode(scene)
+            # General json seg
             result = apply_segmentation(seg_cfg, scene)
+
+            # 2. Override specifici City Generator / Geometry Nodes
+            geometry_override_state = apply_citygen_geometry_overrides()
 
             try:
                 nodes.clear()
@@ -567,6 +573,12 @@ def main():
                 render_configured_output(scene, config["n_frames"])
 
             finally:
+
+                # Prima ripristiniamo gli override specifici
+                restore_citygen_geometry_overrides(
+                    geometry_override_state
+                )
+
                 restore_material_assignments(scene, result["material_snapshot"])
                 restore_geometry_node_material_assignments(
                     result["geometry_node_material_snapshot"]
