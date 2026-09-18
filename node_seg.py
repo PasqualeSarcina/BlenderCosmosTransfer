@@ -18,21 +18,40 @@ def set_material_color(mat, rgb):
 
 
 def get_seg_material(name, rgb):
+
     mat = bpy.data.materials.get(name)
 
     if mat is None:
-        # Copia solo come base tecnica.
-        # Il colore viene comunque impostato subito dopo.
-        source = bpy.data.materials.get("CityGen_lanes_white")
+        mat = bpy.data.materials.new(name=name)
 
-        if source:
-            mat = source.copy()
-            mat.name = name
-        else:
-            mat = bpy.data.materials.new(name)
-            mat.use_nodes = True
+    mat.use_nodes = True
 
-    set_material_color(mat, rgb)
+    # RGB 0-255 -> 0-1
+    color = (
+        rgb[0] / 255.0,
+        rgb[1] / 255.0,
+        rgb[2] / 255.0,
+        1.0
+    )
+
+    mat.diffuse_color = color
+
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    # Ricostruiamo completamente il materiale
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    emission = nodes.new("ShaderNodeEmission")
+
+    emission.inputs["Color"].default_value = color
+    emission.inputs["Strength"].default_value = 1.0
+
+    links.new(
+        emission.outputs["Emission"],
+        output.inputs["Surface"]
+    )
 
     return mat
 

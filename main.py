@@ -4,8 +4,6 @@ import math
 import os
 import sys
 
-from node_seg import apply_citygen_geometry_overrides, restore_citygen_geometry_overrides
-
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.append(script_dir)
@@ -25,6 +23,7 @@ from segmentation_utils import (
     enter_fast_segmentation_render_mode,
     exit_fast_segmentation_render_mode,
 )
+from node_seg import apply_citygen_geometry_overrides, restore_citygen_geometry_overrides
 from wsm_utils import enter_wsm_mode, exit_wsm_mode
 
 
