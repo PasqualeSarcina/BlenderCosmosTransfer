@@ -58,84 +58,96 @@ def get_seg_material(name, rgb):
 def apply_citygen_geometry_overrides():
 
     ng = bpy.data.node_groups["street layout"]
-
     set_direction_material = ng.nodes["Set Material.005"]
 
-    arrow_names = [
-        "01_Left_Arrow",
-        "02_Straight_Arrow",
-        "03_Right_Arrow",
-        "04_Straight_Left_Arrow",
-        "05_Straight_Right_Arrow",
-    ]
+    # -------------------------------------------------
+    # FRECCE + COLORI
+    # -------------------------------------------------
 
-    # -------------------------------
+    arrow_colors = {
+        "01_Left_Arrow": (
+            "SEG_arrow_left",
+            (255, 0, 0)          # rosso
+        ),
+
+        "02_Straight_Arrow": (
+            "SEG_arrow_straight",
+            (0, 255, 255)        # ciano
+        ),
+
+        "03_Right_Arrow": (
+            "SEG_arrow_right",
+            (255, 128, 0)        # arancione
+        ),
+
+        "04_Straight_Left_Arrow": (
+            "SEG_arrow_straight_left",
+            (255, 255, 0)        # giallo
+        ),
+
+        "05_Straight_Right_Arrow": (
+            "SEG_arrow_straight_right",
+            (0, 255, 128)       # verde acqua
+        ),
+    }
+
+    # -------------------------------------------------
     # SNAPSHOT
-    # -------------------------------
+    # -------------------------------------------------
 
     state = {
         "set_material_005_mute": set_direction_material.mute,
         "arrow_materials": {}
     }
 
-    for obj_name in arrow_names:
+    for obj_name in arrow_colors.keys():
+
         obj = bpy.data.objects.get(obj_name)
 
-        if obj:
-            state["arrow_materials"][obj_name] = list(
-                obj.data.materials
-            )
+        if obj is None:
+            print("[SEG GN] Oggetto non trovato:", obj_name)
+            continue
 
-    # -------------------------------
-    # MATERIALI SEGMENTAZIONE
-    # -------------------------------
+        state["arrow_materials"][obj_name] = list(
+            obj.data.materials
+        )
 
-    # stesso colore della classe "lanes" nel JSON
-    lanes_mat = get_seg_material(
-        "SEG_lane_default",
-        (124, 211, 68)
-    )
-
-    # classe specifica freccia sinistra
-    left_mat = get_seg_material(
-        "SEG_arrow_left",
-        (255, 0, 0)
-    )
-
-    # -------------------------------
-    # BYPASS DEL MATERIALE GLOBALE
-    # DELLE FRECCE
-    # -------------------------------
+    # -------------------------------------------------
+    # DISATTIVA IL MATERIALE GLOBALE
+    # -------------------------------------------------
 
     set_direction_material.mute = True
 
-    # -------------------------------
-    # TUTTE LE FRECCE = LANES
-    # -------------------------------
+    # -------------------------------------------------
+    # ASSEGNA UN EMISSION DIVERSO A OGNI FRECCIA
+    # -------------------------------------------------
 
-    for obj_name in arrow_names:
+    for obj_name, (material_name, color) in arrow_colors.items():
 
         obj = bpy.data.objects.get(obj_name)
 
         if obj is None:
             continue
 
+        mat = get_seg_material(
+            material_name,
+            color
+        )
+
         obj.data.materials.clear()
-        obj.data.materials.append(lanes_mat)
+        obj.data.materials.append(mat)
 
-    # -------------------------------
-    # SOLO LEFT ARROW = ROSSO
-    # -------------------------------
+        print(
+            "[SEG GN]",
+            obj_name,
+            "->",
+            material_name,
+            color
+        )
 
-    left_arrow = bpy.data.objects.get("01_Left_Arrow")
+    bpy.context.view_layer.update()
 
-    if left_arrow:
-
-        left_arrow.data.materials.clear()
-        left_arrow.data.materials.append(left_mat)
-
-    print("[SEG GN] arrows default -> lanes")
-    print("[SEG GN] left arrow -> RED")
+    print("[SEG GN] Set Material.005 -> MUTE")
 
     return state
 
