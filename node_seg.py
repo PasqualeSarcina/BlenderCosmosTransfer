@@ -58,7 +58,9 @@ def get_seg_material(name, rgb):
 def apply_citygen_geometry_overrides():
 
     ng = bpy.data.node_groups["street layout"]
+
     set_direction_material = ng.nodes["Set Material.005"]
+    crosswalk_node = ng.nodes["Set Material.002"]
 
     # -------------------------------------------------
     # FRECCE + COLORI
@@ -77,7 +79,7 @@ def apply_citygen_geometry_overrides():
 
         "03_Right_Arrow": (
             "SEG_arrow_right",
-            (255, 128, 0)        # arancione
+            (237, 94, 5)        # arancione
         ),
 
         "04_Straight_Left_Arrow": (
@@ -87,7 +89,7 @@ def apply_citygen_geometry_overrides():
 
         "05_Straight_Right_Arrow": (
             "SEG_arrow_straight_right",
-            (0, 255, 128)       # verde acqua
+            (0, 255, 128)        # verde acqua
         ),
     }
 
@@ -95,11 +97,29 @@ def apply_citygen_geometry_overrides():
     # SNAPSHOT
     # -------------------------------------------------
 
+    crosswalk_socket = crosswalk_node.inputs["Material"]
+
     state = {
         "set_material_005_mute": set_direction_material.mute,
-        "arrow_materials": {}
+        "arrow_materials": {},
+
+        # Salviamo il valore originale
+        "crosswalk_old_material": crosswalk_socket.default_value,
+
+        # Salviamo anche l'eventuale collegamento
+        "crosswalk_link": None,
     }
 
+    # Se Material è collegato, salviamo da dove arriva
+    if crosswalk_socket.is_linked:
+        link = crosswalk_socket.links[0]
+
+        state["crosswalk_link"] = {
+            "from_socket": link.from_socket,
+            "to_socket": link.to_socket,
+        }
+
+    # Salva materiali originali delle frecce
     for obj_name in arrow_colors.keys():
 
         obj = bpy.data.objects.get(obj_name)
@@ -112,16 +132,39 @@ def apply_citygen_geometry_overrides():
             obj.data.materials
         )
 
-    # -------------------------------------------------
-    # DISATTIVA IL MATERIALE GLOBALE
-    # -------------------------------------------------
+    # =================================================
+    # CROSSWALK
+    # =================================================
 
+    crosswalk_mat = get_seg_material(
+        "SEG_crosswalk",
+        (156, 7, 224)           # viola
+    )
+
+    # Se il socket è collegato a Crosswalk Material,
+    # rimuoviamo temporaneamente il collegamento
+    if crosswalk_socket.is_linked:
+
+        for link in list(crosswalk_socket.links):
+            ng.links.remove(link)
+
+    # Ora possiamo assegnare direttamente il nostro
+    # materiale Emission
+    crosswalk_socket.default_value = crosswalk_mat
+
+    print(
+        "[SEG GN] Crosswalk -> SEG_crosswalk",
+        "(170, 80, 255)"
+    )
+
+    # =================================================
+    # FRECCE
+    # =================================================
+
+    # Disattiva Set Material globale delle frecce
     set_direction_material.mute = True
 
-    # -------------------------------------------------
-    # ASSEGNA UN EMISSION DIVERSO A OGNI FRECCIA
-    # -------------------------------------------------
-
+    # Assegna un Emission diverso a ogni freccia
     for obj_name, (material_name, color) in arrow_colors.items():
 
         obj = bpy.data.objects.get(obj_name)
