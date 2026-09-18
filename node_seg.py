@@ -62,6 +62,10 @@ def apply_citygen_geometry_overrides():
     set_direction_material = ng.nodes["Set Material.005"]
     crosswalk_node = ng.nodes["Set Material.002"]
 
+    # STOP LINE
+    lane_material_node = ng.nodes["Set Material.004"]
+    stop_source_node = ng.nodes["Flip Faces"]
+
     # -------------------------------------------------
     # FRECCE + COLORI
     # -------------------------------------------------
@@ -108,6 +112,11 @@ def apply_citygen_geometry_overrides():
 
         # Salviamo anche l'eventuale collegamento
         "crosswalk_link": None,
+
+        # stop line
+        "stop_source_links": [],
+        "lane_output_links": [],
+        "stop_temp_nodes": [],
     }
 
     # Se Material è collegato, salviamo da dove arriva
@@ -156,6 +165,116 @@ def apply_citygen_geometry_overrides():
         "[SEG GN] Crosswalk -> SEG_crosswalk",
         "(170, 80, 255)"
     )
+
+    # =================================================
+    # STOP LINE
+    # =================================================
+
+    stop_mat = get_seg_material(
+        "SEG_stop_line",
+        (255, 255, 255)  # bianco, per ora
+    )
+
+    # Output di Flip Faces.
+    # Normalmente si chiama "Mesh".
+    stop_output = stop_source_node.outputs.get("Mesh")
+
+    if stop_output is None:
+        raise RuntimeError(
+            "[SEG GN] Output Mesh di Flip Faces non trovato"
+        )
+
+    # -------------------------------------------------
+    # 1. SALVA E SCOLLEGA IL RAMO STOP
+    # -------------------------------------------------
+
+    for link in list(stop_output.links):
+        state["stop_source_links"].append({
+            "from_socket": link.from_socket,
+            "to_socket": link.to_socket,
+        })
+
+        ng.links.remove(link)
+
+    # -------------------------------------------------
+    # 2. CREA SET MATERIAL DEDICATO
+    # -------------------------------------------------
+
+    stop_set_mat = ng.nodes.new(
+        type="GeometryNodeSetMaterial"
+    )
+
+    stop_set_mat.name = "__SEG_STOP_SET_MATERIAL__"
+    stop_set_mat.label = "SEG Stop Line"
+
+    stop_set_mat.inputs["Material"].default_value = stop_mat
+
+    ng.links.new(
+        stop_output,
+        stop_set_mat.inputs["Geometry"]
+    )
+
+    state["stop_temp_nodes"].append(
+        stop_set_mat.name
+    )
+
+    # -------------------------------------------------
+    # 3. INTERCETTA L'USCITA DI SET MATERIAL.004
+    # -------------------------------------------------
+
+    lane_output = lane_material_node.outputs.get("Geometry")
+
+    if lane_output is None:
+        raise RuntimeError(
+            "[SEG GN] Output Geometry di Set Material.004 non trovato"
+        )
+
+    for link in list(lane_output.links):
+        state["lane_output_links"].append({
+            "from_socket": link.from_socket,
+            "to_socket": link.to_socket,
+        })
+
+        ng.links.remove(link)
+
+    # -------------------------------------------------
+    # 4. CREA JOIN DOPO SET MATERIAL.004
+    # -------------------------------------------------
+
+    stop_join = ng.nodes.new(
+        type="GeometryNodeJoinGeometry"
+    )
+
+    stop_join.name = "__SEG_STOP_REJOIN__"
+    stop_join.label = "SEG Stop Rejoin"
+
+    state["stop_temp_nodes"].append(
+        stop_join.name
+    )
+
+    # Lane normali, già passate da Set Material.004
+    ng.links.new(
+        lane_output,
+        stop_join.inputs["Geometry"]
+    )
+
+    # Stop line, con il proprio materiale
+    ng.links.new(
+        stop_set_mat.outputs["Geometry"],
+        stop_join.inputs["Geometry"]
+    )
+
+    # -------------------------------------------------
+    # 5. RICOLLEGA IL FLUSSO ORIGINALE
+    # -------------------------------------------------
+
+    for old_link in state["lane_output_links"]:
+        ng.links.new(
+            stop_join.outputs["Geometry"],
+            old_link["to_socket"]
+        )
+
+    print("[SEG GN] Stop line -> SEG_stop_line")
 
     # =================================================
     # FRECCE
