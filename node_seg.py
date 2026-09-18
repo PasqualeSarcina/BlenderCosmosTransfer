@@ -117,6 +117,9 @@ def apply_citygen_geometry_overrides():
         "stop_source_links": [],
         "lane_output_links": [],
         "stop_temp_nodes": [],
+
+        # cars
+        "car_materials": {},
     }
 
     # Se Material è collegato, salviamo da dove arriva
@@ -140,6 +143,55 @@ def apply_citygen_geometry_overrides():
         state["arrow_materials"][obj_name] = list(
             obj.data.materials
         )
+
+        # =================================================
+        # AUTO
+        # =================================================
+
+        car_mat = get_seg_material(
+            "SEG_car",
+            (0, 0, 255)
+        )
+
+        car_name_patterns = [
+            "low poly car",
+            "parking car",
+            "car body",
+            "car front wheels",
+            "car back wheels",
+        ]
+
+        for obj in bpy.data.objects:
+
+            name_lower = obj.name.lower()
+
+            if not any(
+                    pattern in name_lower
+                    for pattern in car_name_patterns
+            ):
+                continue
+
+            if not hasattr(obj.data, "materials"):
+                continue
+
+            state["car_materials"][obj.name] = list(
+                obj.data.materials
+            )
+
+            if len(obj.data.materials) == 0:
+
+                obj.data.materials.append(car_mat)
+
+            else:
+
+                for i in range(len(obj.data.materials)):
+                    obj.data.materials[i] = car_mat
+
+            print(
+                "[SEG GN] CAR:",
+                obj.name,
+                "-> BLUE"
+            )
 
     # =================================================
     # CROSSWALK
