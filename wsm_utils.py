@@ -1,5 +1,6 @@
 import bpy
 
+from node_wsm import enable_crosswalk_wsm
 from segmentation_utils import (
     apply_segmentation,
     enter_fast_segmentation_render_mode,
@@ -1037,6 +1038,8 @@ def enter_wsm_mode(scene, wsm_config):
         scene.view_settings.exposure = 0.0
         scene.view_settings.gamma = 1.0
 
+        crosswalk_state = enable_crosswalk_wsm()
+
         # Il fallback background rende nero tutto; le classi configurate
         # mantengono colorati corsie, segnaletica e bordi del marciapiede.
         segmentation_result = apply_segmentation(wsm_config, scene)
@@ -1049,6 +1052,7 @@ def enter_wsm_mode(scene, wsm_config):
         bpy.context.view_layer.update()
 
         return {
+            "crosswalk_state": crosswalk_state,
             "render_state": render_state,
             "color_state": color_state,
             "segmentation_result": segmentation_result,
@@ -1070,21 +1074,43 @@ def enter_wsm_mode(scene, wsm_config):
 
 def exit_wsm_mode(scene, state):
     try:
-        disable_car_bounding_boxes(state["car_changes"])
+        disable_car_bounding_boxes(
+            state["car_changes"]
+        )
+
     finally:
         try:
             _restore_segmentation(
                 scene,
                 state["segmentation_result"],
             )
+
         finally:
+            # Ripristina le strisce pedonali originali:
+            # - ricollega Scale Elements -> Extrude Mesh
+            # - ripristina il materiale precedente
+            disable_crosswalk_wsm(
+                state.get("crosswalk_state")
+            )
+
             color_state = state["color_state"]
-            scene.view_settings.view_transform = color_state["view_transform"]
-            scene.view_settings.look = color_state["look"]
-            scene.view_settings.exposure = color_state["exposure"]
-            scene.view_settings.gamma = color_state["gamma"]
+
+            scene.view_settings.view_transform = (
+                color_state["view_transform"]
+            )
+            scene.view_settings.look = (
+                color_state["look"]
+            )
+            scene.view_settings.exposure = (
+                color_state["exposure"]
+            )
+            scene.view_settings.gamma = (
+                color_state["gamma"]
+            )
+
             exit_fast_segmentation_render_mode(
                 scene,
                 state["render_state"],
             )
+
             bpy.context.view_layer.update()
