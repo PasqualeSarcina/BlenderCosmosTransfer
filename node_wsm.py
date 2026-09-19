@@ -880,3 +880,172 @@ def disable_centerline_wsm(state):
     bpy.context.view_layer.update()
 
     print("WSM mezzeria ripristinata")
+
+
+def enable_arrows_wsm():
+    """
+    Colora tutte le frecce stradali con il colore WSM
+    road_markings = [20, 254, 185].
+
+    Disattiva temporaneamente Set Material.005 perché,
+    altrimenti, il materiale globale delle frecce
+    sovrascriverebbe quello degli oggetti sorgente.
+    """
+
+    NODE_GROUP_NAME = "street layout"
+    DIRECTION_SET_MATERIAL_NODE = "Set Material.005"
+
+    ARROW_OBJECTS = [
+        "01_Left_Arrow",
+        "02_Straight_Arrow",
+        "03_Right_Arrow",
+        "04_Straight_Left_Arrow",
+        "05_Straight_Right_Arrow",
+    ]
+
+    ROAD_MARKINGS_RGB = (20, 254, 185)
+
+    tree = bpy.data.node_groups.get(NODE_GROUP_NAME)
+
+    if tree is None:
+        raise RuntimeError(
+            f"Node group '{NODE_GROUP_NAME}' non trovato"
+        )
+
+    set_direction_material = tree.nodes.get(
+        DIRECTION_SET_MATERIAL_NODE
+    )
+
+    if set_direction_material is None:
+        raise RuntimeError(
+            f"Nodo '{DIRECTION_SET_MATERIAL_NODE}' non trovato"
+        )
+
+    # ---------------------------------------------------------
+    # SALVA STATO ORIGINALE
+    # ---------------------------------------------------------
+
+    state = {
+        "set_material_mute":
+            set_direction_material.mute,
+
+        "arrow_materials": {},
+    }
+
+    # ---------------------------------------------------------
+    # MATERIALE TURCHESE
+    # ---------------------------------------------------------
+
+    turquoise_material = _get_wsm_emission_material(
+        "WSM_ROAD_MARKINGS_TURQUOISE",
+        ROAD_MARKINGS_RGB,
+    )
+
+    # ---------------------------------------------------------
+    # DISATTIVA IL SET MATERIAL GLOBALE
+    # ---------------------------------------------------------
+
+    set_direction_material.mute = True
+
+    # ---------------------------------------------------------
+    # ASSEGNA IL TURCHESE A TUTTE LE FRECCE
+    # ---------------------------------------------------------
+
+    for obj_name in ARROW_OBJECTS:
+
+        obj = bpy.data.objects.get(obj_name)
+
+        if obj is None:
+            print(
+                "[WSM] Freccia non trovata:",
+                obj_name
+            )
+            continue
+
+        if not hasattr(obj.data, "materials"):
+            print(
+                "[WSM] Oggetto senza materials:",
+                obj_name
+            )
+            continue
+
+        # salva tutti i materiali originali
+        state["arrow_materials"][obj_name] = list(
+            obj.data.materials
+        )
+
+        # sostituisce tutto con il materiale WSM
+        obj.data.materials.clear()
+        obj.data.materials.append(
+            turquoise_material
+        )
+
+        print(
+            "[WSM]",
+            obj_name,
+            "-> road_markings",
+            ROAD_MARKINGS_RGB
+        )
+
+    bpy.context.view_layer.update()
+
+    print(
+        "[WSM] Set Material.005 -> MUTE | "
+        "frecce -> [20, 254, 185]"
+    )
+
+    return state
+
+def disable_arrows_wsm(state):
+    """
+    Ripristina i materiali originali delle frecce
+    e lo stato originale di Set Material.005.
+    """
+
+    if state is None:
+        return
+
+    tree = bpy.data.node_groups.get(
+        "street layout"
+    )
+
+    if tree is None:
+        return
+
+    set_direction_material = tree.nodes.get(
+        "Set Material.005"
+    )
+
+    # ---------------------------------------------------------
+    # RIPRISTINA I MATERIALI ORIGINALI
+    # ---------------------------------------------------------
+
+    for obj_name, original_materials in (
+        state["arrow_materials"].items()
+    ):
+
+        obj = bpy.data.objects.get(obj_name)
+
+        if obj is None:
+            continue
+
+        if not hasattr(obj.data, "materials"):
+            continue
+
+        obj.data.materials.clear()
+
+        for material in original_materials:
+            obj.data.materials.append(material)
+
+    # ---------------------------------------------------------
+    # RIPRISTINA Set Material.005
+    # ---------------------------------------------------------
+
+    if set_direction_material is not None:
+        set_direction_material.mute = (
+            state["set_material_mute"]
+        )
+
+    bpy.context.view_layer.update()
+
+    print("[WSM] Frecce originali ripristinate")

@@ -1,7 +1,7 @@
 import bpy
 
 from node_wsm import enable_crosswalk_wsm, disable_crosswalk_wsm, enable_wait_lines_wsm, enable_centerline_wsm, \
-    disable_centerline_wsm, disable_wait_lines_wsm
+    disable_centerline_wsm, disable_wait_lines_wsm, enable_arrows_wsm, disable_arrows_wsm
 from segmentation_utils import (
     apply_segmentation,
     enter_fast_segmentation_render_mode,
@@ -1037,6 +1037,7 @@ def enter_wsm_mode(scene, wsm_config):
     crosswalk_state = None
     wait_lines_state = None
     centerline_state = None
+    arrows_state = None
 
     try:
         scene.view_settings.view_transform = "Raw"
@@ -1058,6 +1059,8 @@ def enter_wsm_mode(scene, wsm_config):
 
         centerline_state = enable_centerline_wsm()
 
+        arrows_state = enable_arrows_wsm()
+
         car_material = _get_or_create_nvidia_car_material(
             wsm_config
         )
@@ -1077,6 +1080,8 @@ def enter_wsm_mode(scene, wsm_config):
             "wait_lines_state": wait_lines_state,
             "centerline_state": centerline_state,
 
+            "arrows_state": arrows_state,
+
             "car_changes": car_changes,
         }
 
@@ -1085,6 +1090,9 @@ def enter_wsm_mode(scene, wsm_config):
 
         if car_changes:
             disable_car_bounding_boxes(car_changes)
+
+        if arrows_state:
+            disable_arrows_wsm(arrows_state)
 
         if centerline_state is not None:
             disable_centerline_wsm(
@@ -1140,6 +1148,10 @@ def exit_wsm_mode(scene, state):
             # ORDINE INVERSO rispetto all'enable
             disable_centerline_wsm(
                 state.get("centerline_state")
+            )
+
+            disable_arrows_wsm(
+                state.get("arrows_state")
             )
 
             disable_wait_lines_wsm(
