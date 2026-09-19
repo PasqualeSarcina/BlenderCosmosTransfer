@@ -1029,8 +1029,10 @@ def enter_wsm_mode(scene, wsm_config):
         "exposure": scene.view_settings.exposure,
         "gamma": scene.view_settings.gamma,
     }
+
     segmentation_result = None
     car_changes = []
+    crosswalk_state = None
 
     try:
         scene.view_settings.view_transform = "Raw"
@@ -1060,16 +1062,42 @@ def enter_wsm_mode(scene, wsm_config):
             "car_changes": car_changes,
         }
 
+
     except Exception:
+
         if car_changes:
             disable_car_bounding_boxes(car_changes)
+
+        if crosswalk_state is not None:
+            disable_crosswalk_wsm(crosswalk_state)
+
         if segmentation_result is not None:
-            _restore_segmentation(scene, segmentation_result)
+            _restore_segmentation(
+
+                scene,
+
+                segmentation_result,
+
+            )
+
         scene.view_settings.view_transform = color_state["view_transform"]
+
         scene.view_settings.look = color_state["look"]
+
         scene.view_settings.exposure = color_state["exposure"]
+
         scene.view_settings.gamma = color_state["gamma"]
-        exit_fast_segmentation_render_mode(scene, render_state)
+
+        exit_fast_segmentation_render_mode(
+
+            scene,
+
+            render_state,
+
+        )
+
+        bpy.context.view_layer.update()
+
         raise
 
 
