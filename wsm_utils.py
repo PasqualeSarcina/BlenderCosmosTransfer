@@ -1038,11 +1038,12 @@ def enter_wsm_mode(scene, wsm_config):
         scene.view_settings.exposure = 0.0
         scene.view_settings.gamma = 1.0
 
-        crosswalk_state = enable_crosswalk_wsm()
 
         # Il fallback background rende nero tutto; le classi configurate
         # mantengono colorati corsie, segnaletica e bordi del marciapiede.
         segmentation_result = apply_segmentation(wsm_config, scene)
+
+        crosswalk_state = enable_crosswalk_wsm()
 
         car_material = _get_or_create_nvidia_car_material(wsm_config)
         car_changes = enable_car_bounding_boxes(
