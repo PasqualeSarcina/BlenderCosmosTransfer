@@ -13,8 +13,8 @@ from segmentation_utils import (
 
 
 DEFAULT_NODE_GROUP_NAME = "City_Generator_2.0"
-DEFAULT_CAR_COLLECTION_NAMES = {"car model"}
-DEFAULT_CAR_OBJECT_NAMES = {"parking car", "Low poly car "}
+DEFAULT_CAR_COLLECTION_NAMES = {"car model", "parking cars"}
+DEFAULT_CAR_OBJECT_NAMES = {"parking car", "Low poly car", "Low poly car "}
 DEFAULT_GENERATOR_OBJECT_NAME = "City_Generator_2.0_Object"
 DEFAULT_BAKED_TRAFFIC_COLLECTION_NAMES = {"Traffic_Baked"}
 DEFAULT_BAKED_CAR_OBJECT_NAMES = {
@@ -27,9 +27,10 @@ DEFAULT_BAKED_CAR_OBJECT_NAMES = {
 }
 DEFAULT_BAKED_CAR_BODY_NAMES = {"body", "parked body"}
 WSM_CAR_GRADIENT_ATTRIBUTE = "wsm_car_longitudinal_gradient"
-DEFAULT_NVIDIA_CAR_FRONT_COLOR = [0, 46, 136]
-DEFAULT_NVIDIA_CAR_REAR_COLOR = [126, 206, 255]
-DEFAULT_NVIDIA_EDGE_COLOR = [200, 200, 200]
+DEFAULT_NVIDIA_CAR_FRONT_COLOR = [0, 46, 136]       # blu scuro - fronte
+DEFAULT_NVIDIA_CAR_REAR_COLOR = [126, 206, 255]     # azzurro chiaro - retro
+DEFAULT_NVIDIA_EDGE_COLOR = [200, 200, 200]          # grigio chiaro - bordi
+
 BOX_EDGE_INDICES = (
     (0, 1), (1, 2), (2, 3), (3, 0),
     (4, 5), (5, 6), (6, 7), (7, 4),
