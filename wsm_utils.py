@@ -1,6 +1,6 @@
 import bpy
 
-from node_wsm import enable_crosswalk_wsm
+from node_wsm import enable_crosswalk_wsm, disable_crosswalk_wsm
 from segmentation_utils import (
     apply_segmentation,
     enter_fast_segmentation_render_mode,
