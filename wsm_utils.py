@@ -728,6 +728,16 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     source_socket = original_link.from_socket
                     target_socket = original_link.to_socket
 
+                    target_node = original_link.to_node
+
+                    pick_instance_socket = target_node.inputs.get("Pick Instance")
+
+                    previous_pick_instance = None
+
+                    if pick_instance_socket is not None:
+                        previous_pick_instance = pick_instance_socket.default_value
+                        pick_instance_socket.default_value = False
+
                     # Rimuove solamente il collegamento originale dell'auto.
                     tree.links.remove(original_link)
 
@@ -911,6 +921,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
 
                     changes.append({
+                        "target_node": target_node,
+                        "previous_pick_instance": previous_pick_instance,
                         "kind": "geometry_nodes",
                         "tree": tree,
                         "source_socket": source_socket,
@@ -980,6 +992,15 @@ def disable_car_bounding_boxes(changes):
             change["source_socket"],
             change["target_socket"],
         )
+
+        # Ripristina Pick Instance
+        previous_pick_instance = change.get("previous_pick_instance")
+
+        if previous_pick_instance is not None:
+            pick_instance_socket = change["target_node"].inputs.get("Pick Instance")
+
+            if pick_instance_socket is not None:
+                pick_instance_socket.default_value = previous_pick_instance
 
     bpy.context.view_layer.update()
 
