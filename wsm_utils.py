@@ -664,6 +664,64 @@ def _get_or_create_nvidia_edge_material(wsm_config):
     return material
 
 
+def _box_local_gradient_field(tree):
+    """Normalize local Y per box island, including nested instance meshes.
+
+    Each box has equally many corners on its two Y ends. Their mean is
+    the center; the mean absolute distance from it is the half length.
+    These are fields, so Store Named Attribute evaluates them on each
+    referenced mesh before realization, without mixing instance transforms.
+    """
+    nodes = []
+
+    def new(node_type, name):
+        node = tree.nodes.new(node_type)
+        node.name = f"WSM_Car_{name}"
+        nodes.append(node)
+        return node
+
+    def total(value, name):
+        node = new("GeometryNodeAccumulateField", name)
+        node.data_type = "FLOAT"
+        node.domain = "POINT"
+        tree.links.new(islands.outputs["Island Index"], node.inputs["Group ID"])
+        if isinstance(value, float):
+            node.inputs["Value"].default_value = value
+        else:
+            tree.links.new(value, node.inputs["Value"])
+        return node.outputs["Total"]
+
+    def math_field(operation, first, second, name):
+        node = new("ShaderNodeMath", name)
+        node.operation = operation
+        tree.links.new(first, node.inputs[0])
+        if second is not None:
+            tree.links.new(second, node.inputs[1])
+        return node.outputs[0]
+
+    position = new("GeometryNodeInputPosition", "Local_Position")
+    separate = new("ShaderNodeSeparateXYZ", "Local_Y")
+    tree.links.new(position.outputs["Position"], separate.inputs["Vector"])
+    islands = new("GeometryNodeInputMeshIsland", "Box_Islands")
+    count = total(1.0, "Corner_Count")
+    y = separate.outputs["Y"]
+    center = math_field("DIVIDE", total(y, "Y_Total"), count, "Y_Center")
+    offset = math_field("SUBTRACT", y, center, "Y_Offset")
+    distance = math_field("ABSOLUTE", offset, None, "Y_Distance")
+    half_length = math_field(
+        "DIVIDE", total(distance, "Distance_Total"), count, "Half_Length"
+    )
+    normalized = math_field("DIVIDE", offset, half_length, "Normalized_Y")
+    gradient = new("ShaderNodeMapRange", "Longitudinal_Gradient")
+    gradient.clamp = True
+    gradient.inputs["From Min"].default_value = -1.0
+    gradient.inputs["From Max"].default_value = 1.0
+    gradient.inputs["To Min"].default_value = 1.0  # front: local -Y
+    gradient.inputs["To Max"].default_value = 0.0
+    tree.links.new(normalized, gradient.inputs["Value"])
+    return nodes, gradient.outputs["Result"]
+
+
 def enable_car_bounding_boxes(car_material, wsm_config=None):
     wsm_config = wsm_config or {}
     node_group_name = wsm_config.get(
@@ -727,8 +785,6 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                 ]
 
                 for original_link in direct_links:
-                    source_socket = original_link.from_socket
-                    target_socket = original_link.to_socket
                     target_node = original_link.to_node
                     instances_socket = target_node.outputs.get("Instances")
 
@@ -761,17 +817,6 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     if use_radius is not None:
                         use_radius.default_value = False
 
-                    instance_bounds = tree.nodes.new(
-                        "GeometryNodeInputInstanceBounds"
-                    )
-                    instance_bounds.name = "WSM_Car_Instance_Bounds"
-                    instance_bounds.label = "WSM: bounds per car instance"
-                    instance_bounds.location = (
-                        target_node.location.x + 220,
-                        source_node.location.y - 180,
-                    )
-                    instance_bounds.inputs["Use Radius"].default_value = False
-
                     realize_boxes = tree.nodes.new(
                         "GeometryNodeRealizeInstances"
                     )
@@ -782,31 +827,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         source_node.location.y,
                     )
 
-                    position = tree.nodes.new(
-                        "GeometryNodeInputPosition"
-                    )
-                    position.name = "WSM_Car_Position"
-
-                    separate_position = tree.nodes.new(
-                        "ShaderNodeSeparateXYZ"
-                    )
-                    separate_position.name = "WSM_Car_Position_Y"
-
-                    separate_minimum = tree.nodes.new(
-                        "ShaderNodeSeparateXYZ"
-                    )
-                    separate_minimum.name = "WSM_Car_Minimum_Y"
-
-                    separate_maximum = tree.nodes.new(
-                        "ShaderNodeSeparateXYZ"
-                    )
-                    separate_maximum.name = "WSM_Car_Maximum_Y"
-
-                    gradient = tree.nodes.new("ShaderNodeMapRange")
-                    gradient.name = "WSM_Car_Longitudinal_Gradient"
-                    gradient.clamp = True
-                    gradient.inputs["To Min"].default_value = 1.0
-                    gradient.inputs["To Max"].default_value = 0.0
+                    gradient_nodes, gradient_value = _box_local_gradient_field(tree)
 
                     store_gradient = tree.nodes.new(
                         "GeometryNodeStoreNamedAttribute"
@@ -870,42 +891,18 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
                     tree.links.new(
                         bounding_box.outputs["Bounding Box"],
-                        realize_boxes.inputs["Geometry"],
-                    )
-                    tree.links.new(
-                        position.outputs["Position"],
-                        separate_position.inputs["Vector"],
-                    )
-                    tree.links.new(
-                        instance_bounds.outputs["Min"],
-                        separate_minimum.inputs["Vector"],
-                    )
-                    tree.links.new(
-                        instance_bounds.outputs["Max"],
-                        separate_maximum.inputs["Vector"],
-                    )
-                    tree.links.new(
-                        separate_position.outputs["Y"],
-                        gradient.inputs["Value"],
-                    )
-                    tree.links.new(
-                        separate_minimum.outputs["Y"],
-                        gradient.inputs["From Min"],
-                    )
-                    tree.links.new(
-                        separate_maximum.outputs["Y"],
-                        gradient.inputs["From Max"],
-                    )
-                    tree.links.new(
-                        realize_boxes.outputs["Geometry"],
                         store_gradient.inputs["Geometry"],
                     )
                     tree.links.new(
-                        gradient.outputs["Result"],
+                        gradient_value,
                         store_gradient.inputs["Value"],
                     )
                     tree.links.new(
                         store_gradient.outputs["Geometry"],
+                        realize_boxes.inputs["Geometry"],
+                    )
+                    tree.links.new(
+                        realize_boxes.outputs["Geometry"],
                         set_material.inputs["Geometry"],
                     )
                     tree.links.new(
@@ -944,13 +941,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         "instances_socket": instances_socket,
                         "downstream_sockets": downstream_sockets,
                         "bounding_box": bounding_box,
-                        "instance_bounds": instance_bounds,
                         "realize_boxes": realize_boxes,
-                        "position": position,
-                        "separate_position": separate_position,
-                        "separate_minimum": separate_minimum,
-                        "separate_maximum": separate_maximum,
-                        "gradient": gradient,
+                        "gradient_nodes": gradient_nodes,
                         "store_gradient": store_gradient,
                         "mesh_to_curve": mesh_to_curve,
                         "edge_profile": edge_profile,
@@ -996,12 +988,8 @@ def disable_car_bounding_boxes(changes):
         tree.nodes.remove(change["mesh_to_curve"])
         tree.nodes.remove(change["set_material"])
         tree.nodes.remove(change["store_gradient"])
-        tree.nodes.remove(change["gradient"])
-        tree.nodes.remove(change["separate_maximum"])
-        tree.nodes.remove(change["separate_minimum"])
-        tree.nodes.remove(change["separate_position"])
-        tree.nodes.remove(change["position"])
-        tree.nodes.remove(change["instance_bounds"])
+        for node in reversed(change["gradient_nodes"]):
+            tree.nodes.remove(node)
         tree.nodes.remove(change["realize_boxes"])
         tree.nodes.remove(change["bounding_box"])
 
