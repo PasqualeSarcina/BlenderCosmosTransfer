@@ -761,6 +761,17 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     if use_radius is not None:
                         use_radius.default_value = False
 
+                    instance_bounds = tree.nodes.new(
+                        "GeometryNodeInputInstanceBounds"
+                    )
+                    instance_bounds.name = "WSM_Car_Instance_Bounds"
+                    instance_bounds.label = "WSM: bounds per car instance"
+                    instance_bounds.location = (
+                        target_node.location.x + 220,
+                        source_node.location.y - 180,
+                    )
+                    instance_bounds.inputs["Use Radius"].default_value = False
+
                     position = tree.nodes.new(
                         "GeometryNodeInputPosition"
                     )
@@ -852,11 +863,11 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         separate_position.inputs["Vector"],
                     )
                     tree.links.new(
-                        bounding_box.outputs["Min"],
+                        instance_bounds.outputs["Min"],
                         separate_minimum.inputs["Vector"],
                     )
                     tree.links.new(
-                        bounding_box.outputs["Max"],
+                        instance_bounds.outputs["Max"],
                         separate_maximum.inputs["Vector"],
                     )
                     tree.links.new(
@@ -919,6 +930,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         "instances_socket": instances_socket,
                         "downstream_sockets": downstream_sockets,
                         "bounding_box": bounding_box,
+                        "instance_bounds": instance_bounds,
                         "position": position,
                         "separate_position": separate_position,
                         "separate_minimum": separate_minimum,
@@ -974,6 +986,7 @@ def disable_car_bounding_boxes(changes):
         tree.nodes.remove(change["separate_minimum"])
         tree.nodes.remove(change["separate_position"])
         tree.nodes.remove(change["position"])
+        tree.nodes.remove(change["instance_bounds"])
         tree.nodes.remove(change["bounding_box"])
 
         # Ripristina gli utilizzatori dell'uscita originale delle istanze.
