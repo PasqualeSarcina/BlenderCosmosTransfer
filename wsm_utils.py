@@ -722,6 +722,48 @@ def _box_local_gradient_field(tree):
     return nodes, gradient.outputs["Result"]
 
 
+def _car_box_instance_zone(tree, instances_socket):
+    """Process box meshes locally and return one transformed instance per car.
+
+    Downstream Scale/Rotate/Translate Instances nodes must still receive
+    instances. Realizing the entire traffic branch would silently bypass them.
+    The zone also propagates input instance attributes to its generated output.
+    """
+    nodes = []
+
+    def new(node_type, name):
+        node = tree.nodes.new(node_type)
+        node.name = f"WSM_Car_{name}"
+        nodes.append(node)
+        return node
+
+    zone_out = new("GeometryNodeForeachGeometryElementOutput", "Per_Instance_Output")
+    zone_out.domain = "INSTANCE"
+    zone_out.input_items.new("MATRIX", "Car Transform")
+    zone_out.generation_items[0].name = "Boxes"
+    zone_in = new("GeometryNodeForeachGeometryElementInput", "Per_Instance_Input")
+    zone_in.pair_with_output(zone_out)
+    transform = new("GeometryNodeInstanceTransform", "Original_Transform")
+    local = new("GeometryNodeSetInstanceTransform", "Local_Instance")
+    identity = new("FunctionNodeCombineTransform", "Identity_Transform")
+    wrap = new("GeometryNodeGeometryToInstance", "Box_Instance")
+    restore = new("GeometryNodeSetInstanceTransform", "Restore_Transform")
+
+    tree.links.new(instances_socket, zone_in.inputs["Geometry"])
+    tree.links.new(transform.outputs["Transform"], zone_in.inputs["Car Transform"])
+    tree.links.new(zone_in.outputs["Element"], local.inputs["Instances"])
+    tree.links.new(identity.outputs["Transform"], local.inputs["Transform"])
+    tree.links.new(wrap.outputs["Instances"], restore.inputs["Instances"])
+    tree.links.new(zone_in.outputs["Car Transform"], restore.inputs["Transform"])
+    tree.links.new(restore.outputs["Instances"], zone_out.inputs["Boxes"])
+    return {
+        "nodes": nodes,
+        "local_geometry": local.outputs["Instances"],
+        "box_geometry_input": wrap.inputs["Geometry"],
+        "instances": zone_out.outputs["Boxes"],
+    }
+
+
 def enable_car_bounding_boxes(car_material, wsm_config=None):
     wsm_config = wsm_config or {}
     node_group_name = wsm_config.get(
@@ -802,6 +844,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     ]
                     for link in list(instances_socket.links):
                         tree.links.remove(link)
+
+                    instance_zone = _car_box_instance_zone(tree, instances_socket)
 
                     bounding_box = tree.nodes.new(
                         "GeometryNodeBoundBox"
@@ -886,7 +930,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
 
                     tree.links.new(
-                        instances_socket,
+                        instance_zone["local_geometry"],
                         bounding_box.inputs["Geometry"],
                     )
                     tree.links.new(
@@ -929,9 +973,13 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         set_edge_material.outputs["Geometry"],
                         join_geometry.inputs["Geometry"],
                     )
+                    tree.links.new(
+                        join_geometry.outputs["Geometry"],
+                        instance_zone["box_geometry_input"],
+                    )
                     for downstream_socket in downstream_sockets:
                         tree.links.new(
-                            join_geometry.outputs["Geometry"],
+                            instance_zone["instances"],
                             downstream_socket,
                         )
 
@@ -940,6 +988,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         "tree": tree,
                         "instances_socket": instances_socket,
                         "downstream_sockets": downstream_sockets,
+                        "instance_zone": instance_zone,
                         "bounding_box": bounding_box,
                         "realize_boxes": realize_boxes,
                         "gradient_nodes": gradient_nodes,
@@ -992,6 +1041,8 @@ def disable_car_bounding_boxes(changes):
             tree.nodes.remove(node)
         tree.nodes.remove(change["realize_boxes"])
         tree.nodes.remove(change["bounding_box"])
+        for node in reversed(change["instance_zone"]["nodes"]):
+            tree.nodes.remove(node)
 
         # Ripristina gli utilizzatori dell'uscita originale delle istanze.
         for downstream_socket in change["downstream_sockets"]:
