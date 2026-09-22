@@ -772,6 +772,16 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
                     instance_bounds.inputs["Use Radius"].default_value = False
 
+                    realize_boxes = tree.nodes.new(
+                        "GeometryNodeRealizeInstances"
+                    )
+                    realize_boxes.name = "WSM_Realize_Car_Boxes"
+                    realize_boxes.label = "WSM: realize generated boxes"
+                    realize_boxes.location = (
+                        target_node.location.x + 440,
+                        source_node.location.y,
+                    )
+
                     position = tree.nodes.new(
                         "GeometryNodeInputPosition"
                     )
@@ -859,6 +869,10 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         bounding_box.inputs["Geometry"],
                     )
                     tree.links.new(
+                        bounding_box.outputs["Bounding Box"],
+                        realize_boxes.inputs["Geometry"],
+                    )
+                    tree.links.new(
                         position.outputs["Position"],
                         separate_position.inputs["Vector"],
                     )
@@ -883,7 +897,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         gradient.inputs["From Max"],
                     )
                     tree.links.new(
-                        bounding_box.outputs["Bounding Box"],
+                        realize_boxes.outputs["Geometry"],
                         store_gradient.inputs["Geometry"],
                     )
                     tree.links.new(
@@ -895,7 +909,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         set_material.inputs["Geometry"],
                     )
                     tree.links.new(
-                        bounding_box.outputs["Bounding Box"],
+                        realize_boxes.outputs["Geometry"],
                         mesh_to_curve.inputs["Mesh"],
                     )
                     tree.links.new(
@@ -931,6 +945,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         "downstream_sockets": downstream_sockets,
                         "bounding_box": bounding_box,
                         "instance_bounds": instance_bounds,
+                        "realize_boxes": realize_boxes,
                         "position": position,
                         "separate_position": separate_position,
                         "separate_minimum": separate_minimum,
@@ -987,6 +1002,7 @@ def disable_car_bounding_boxes(changes):
         tree.nodes.remove(change["separate_position"])
         tree.nodes.remove(change["position"])
         tree.nodes.remove(change["instance_bounds"])
+        tree.nodes.remove(change["realize_boxes"])
         tree.nodes.remove(change["bounding_box"])
 
         # Ripristina gli utilizzatori dell'uscita originale delle istanze.
