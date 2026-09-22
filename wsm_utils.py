@@ -764,6 +764,66 @@ def _car_box_instance_zone(tree, instances_socket):
     }
 
 
+def _car_box_from_vertices(tree, geometry):
+    """Build one local box from evaluated surface vertices of a single car.
+
+    Called inside the per-instance zone: realizing here gathers nested car
+    parts without merging different vehicles or measuring a rotated world AABB.
+    Loose vertices/edges have no renderable mesh surface and do not set bounds.
+    """
+    nodes = []
+
+    def new(node_type, name):
+        node = tree.nodes.new(node_type)
+        node.name = f"WSM_Car_{name}"
+        nodes.append(node)
+        return node
+
+    realize = new("GeometryNodeRealizeInstances", "Evaluated_Vertices")
+    realize.inputs["Realize All"].default_value = True
+    position = new("GeometryNodeInputPosition", "Vertex_Position")
+    neighbors = new("GeometryNodeInputMeshVertexNeighbors", "Vertex_Faces")
+    on_surface = new("ShaderNodeMath", "Surface_Vertices")
+    on_surface.operation = "GREATER_THAN"
+    on_surface.inputs[1].default_value = 0.0
+    extrema = new("GeometryNodeAttributeStatistic", "Vertex_Extrema")
+    extrema.data_type = "FLOAT_VECTOR"
+    extrema.domain = "POINT"
+    size = new("ShaderNodeVectorMath", "Box_Size")
+    size.operation = "SUBTRACT"
+    sum_ends = new("ShaderNodeVectorMath", "Box_Ends_Sum")
+    sum_ends.operation = "ADD"
+    center = new("ShaderNodeVectorMath", "Box_Center")
+    center.operation = "SCALE"
+    center.inputs["Scale"].default_value = 0.5
+    cube = new("GeometryNodeMeshCube", "Vertex_Box")
+    for axis in ("X", "Y", "Z"):
+        cube.inputs[f"Vertices {axis}"].default_value = 2
+    translate = new("GeometryNodeTransform", "Box_Local_Position")
+    count = new("GeometryNodeAttributeDomainSize", "Surface_Size")
+    count.component = "MESH"
+    nonempty = new("GeometryNodeSwitch", "Nonempty_Box")
+    nonempty.input_type = "GEOMETRY"
+
+    tree.links.new(geometry, realize.inputs["Geometry"])
+    tree.links.new(realize.outputs["Geometry"], extrema.inputs["Geometry"])
+    tree.links.new(position.outputs["Position"], extrema.inputs["Attribute"])
+    tree.links.new(neighbors.outputs["Face Count"], on_surface.inputs[0])
+    tree.links.new(on_surface.outputs[0], extrema.inputs["Selection"])
+    tree.links.new(extrema.outputs["Max"], size.inputs[0])
+    tree.links.new(extrema.outputs["Min"], size.inputs[1])
+    tree.links.new(extrema.outputs["Min"], sum_ends.inputs[0])
+    tree.links.new(extrema.outputs["Max"], sum_ends.inputs[1])
+    tree.links.new(sum_ends.outputs["Vector"], center.inputs[0])
+    tree.links.new(size.outputs["Vector"], cube.inputs["Size"])
+    tree.links.new(cube.outputs["Mesh"], translate.inputs["Geometry"])
+    tree.links.new(center.outputs["Vector"], translate.inputs["Translation"])
+    tree.links.new(realize.outputs["Geometry"], count.inputs["Geometry"])
+    tree.links.new(count.outputs["Face Count"], nonempty.inputs["Switch"])
+    tree.links.new(translate.outputs["Geometry"], nonempty.inputs["True"])
+    return nodes, nonempty.outputs["Output"]
+
+
 def enable_car_bounding_boxes(car_material, wsm_config=None):
     wsm_config = wsm_config or {}
     node_group_name = wsm_config.get(
@@ -836,9 +896,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                             "'Instances' prevista"
                         )
 
-                    # La bounding box deve vedere le auto dopo la loro
-                    # distribuzione sui punti. Il Bounding Box node conserva
-                    # una box per ogni istanza top-level, cioe' per veicolo.
+                    # Misura ogni auto separatamente nel suo spazio locale;
+                    # in uscita conserva le istanze e le loro trasformazioni.
                     downstream_sockets = [
                         link.to_socket for link in list(instances_socket.links)
                     ]
@@ -847,28 +906,8 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
 
                     instance_zone = _car_box_instance_zone(tree, instances_socket)
 
-                    bounding_box = tree.nodes.new(
-                        "GeometryNodeBoundBox"
-                    )
-                    bounding_box.name = "WSM_Car_Bounding_Box"
-                    bounding_box.label = "WSM: one box per car instance"
-                    bounding_box.location = (
-                        target_node.location.x + 220,
-                        source_node.location.y,
-                    )
-
-                    use_radius = bounding_box.inputs.get("Use Radius")
-                    if use_radius is not None:
-                        use_radius.default_value = False
-
-                    realize_boxes = tree.nodes.new(
-                        "GeometryNodeRealizeInstances"
-                    )
-                    realize_boxes.name = "WSM_Realize_Car_Boxes"
-                    realize_boxes.label = "WSM: realize generated boxes"
-                    realize_boxes.location = (
-                        target_node.location.x + 440,
-                        source_node.location.y,
+                    vertex_box_nodes, box_geometry = _car_box_from_vertices(
+                        tree, instance_zone["local_geometry"],
                     )
 
                     gradient_nodes, gradient_value = _box_local_gradient_field(tree)
@@ -930,11 +969,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
 
                     tree.links.new(
-                        instance_zone["local_geometry"],
-                        bounding_box.inputs["Geometry"],
-                    )
-                    tree.links.new(
-                        bounding_box.outputs["Bounding Box"],
+                        box_geometry,
                         store_gradient.inputs["Geometry"],
                     )
                     tree.links.new(
@@ -943,14 +978,10 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
                     tree.links.new(
                         store_gradient.outputs["Geometry"],
-                        realize_boxes.inputs["Geometry"],
-                    )
-                    tree.links.new(
-                        realize_boxes.outputs["Geometry"],
                         set_material.inputs["Geometry"],
                     )
                     tree.links.new(
-                        realize_boxes.outputs["Geometry"],
+                        box_geometry,
                         mesh_to_curve.inputs["Mesh"],
                     )
                     tree.links.new(
@@ -989,8 +1020,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         "instances_socket": instances_socket,
                         "downstream_sockets": downstream_sockets,
                         "instance_zone": instance_zone,
-                        "bounding_box": bounding_box,
-                        "realize_boxes": realize_boxes,
+                        "vertex_box_nodes": vertex_box_nodes,
                         "gradient_nodes": gradient_nodes,
                         "store_gradient": store_gradient,
                         "mesh_to_curve": mesh_to_curve,
@@ -1039,8 +1069,8 @@ def disable_car_bounding_boxes(changes):
         tree.nodes.remove(change["store_gradient"])
         for node in reversed(change["gradient_nodes"]):
             tree.nodes.remove(node)
-        tree.nodes.remove(change["realize_boxes"])
-        tree.nodes.remove(change["bounding_box"])
+        for node in reversed(change["vertex_box_nodes"]):
+            tree.nodes.remove(node)
         for node in reversed(change["instance_zone"]["nodes"]):
             tree.nodes.remove(node)
 
