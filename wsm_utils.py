@@ -729,37 +729,31 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                 for original_link in direct_links:
                     source_socket = original_link.from_socket
                     target_socket = original_link.to_socket
-
                     target_node = original_link.to_node
+                    instances_socket = target_node.outputs.get("Instances")
 
-                    pick_instance_socket = target_node.inputs.get("Pick Instance")
+                    if instances_socket is None:
+                        raise RuntimeError(
+                            "Il nodo Instance on Points non ha l'uscita "
+                            "'Instances' prevista"
+                        )
 
-                    previous_pick_instance = None
-
-                    if pick_instance_socket is not None:
-                        previous_pick_instance = pick_instance_socket.default_value
-                        pick_instance_socket.default_value = False
-
-                    # Rimuove solamente il collegamento originale dell'auto.
-                    tree.links.remove(original_link)
-
-                    realize = tree.nodes.new(
-                        "GeometryNodeRealizeInstances"
-                    )
-                    realize.name = "WSM_Realize_Car"
-                    realize.label = "WSM: complete car"
-                    realize.location = (
-                        source_node.location.x + 220,
-                        source_node.location.y,
-                    )
+                    # La bounding box deve vedere le auto dopo la loro
+                    # distribuzione sui punti. Il Bounding Box node conserva
+                    # una box per ogni istanza top-level, cioe' per veicolo.
+                    downstream_sockets = [
+                        link.to_socket for link in list(instances_socket.links)
+                    ]
+                    for link in list(instances_socket.links):
+                        tree.links.remove(link)
 
                     bounding_box = tree.nodes.new(
                         "GeometryNodeBoundBox"
                     )
                     bounding_box.name = "WSM_Car_Bounding_Box"
-                    bounding_box.label = "WSM: car bounding box"
+                    bounding_box.label = "WSM: one box per car instance"
                     bounding_box.location = (
-                        source_node.location.x + 440,
+                        target_node.location.x + 220,
                         source_node.location.y,
                     )
 
@@ -842,7 +836,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     set_material.name = "WSM_Car_Set_Material"
                     set_material.label = "WSM: car material"
                     set_material.location = (
-                        source_node.location.x + 880,
+                        target_node.location.x + 660,
                         source_node.location.y,
                     )
                     set_material.inputs["Material"].default_value = (
@@ -850,11 +844,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                     )
 
                     tree.links.new(
-                        source_socket,
-                        realize.inputs["Geometry"],
-                    )
-                    tree.links.new(
-                        realize.outputs["Geometry"],
+                        instances_socket,
                         bounding_box.inputs["Geometry"],
                     )
                     tree.links.new(
@@ -917,19 +907,17 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                         set_edge_material.outputs["Geometry"],
                         join_geometry.inputs["Geometry"],
                     )
-                    tree.links.new(
-                        join_geometry.outputs["Geometry"],
-                        target_socket,
-                    )
+                    for downstream_socket in downstream_sockets:
+                        tree.links.new(
+                            join_geometry.outputs["Geometry"],
+                            downstream_socket,
+                        )
 
                     changes.append({
-                        "target_node": target_node,
-                        "previous_pick_instance": previous_pick_instance,
                         "kind": "geometry_nodes",
                         "tree": tree,
-                        "source_socket": source_socket,
-                        "target_socket": target_socket,
-                        "realize": realize,
+                        "instances_socket": instances_socket,
+                        "downstream_sockets": downstream_sockets,
                         "bounding_box": bounding_box,
                         "position": position,
                         "separate_position": separate_position,
@@ -987,22 +975,10 @@ def disable_car_bounding_boxes(changes):
         tree.nodes.remove(change["separate_position"])
         tree.nodes.remove(change["position"])
         tree.nodes.remove(change["bounding_box"])
-        tree.nodes.remove(change["realize"])
 
-        # Ripristina il collegamento originale
-        tree.links.new(
-            change["source_socket"],
-            change["target_socket"],
-        )
-
-        # Ripristina Pick Instance
-        previous_pick_instance = change.get("previous_pick_instance")
-
-        if previous_pick_instance is not None:
-            pick_instance_socket = change["target_node"].inputs.get("Pick Instance")
-
-            if pick_instance_socket is not None:
-                pick_instance_socket.default_value = previous_pick_instance
+        # Ripristina gli utilizzatori dell'uscita originale delle istanze.
+        for downstream_socket in change["downstream_sockets"]:
+            tree.links.new(change["instances_socket"], downstream_socket)
 
     bpy.context.view_layer.update()
 
