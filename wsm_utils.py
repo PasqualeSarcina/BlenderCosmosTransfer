@@ -588,8 +588,8 @@ def _get_or_create_nvidia_car_material(wsm_config, vehicle_class="Car"):
     face_gradient.blend_type = "MIX"
     face_gradient.inputs[1].default_value = rear_color
     face_gradient.inputs[2].default_value = front_color
-    if vehicle_class == "Cyclist":
-        # I ciclisti hanno il davanti su +Y, opposto alle auto (-Y).
+    if vehicle_class in {"Cyclist", "Truck"}:
+        # Ciclisti e truck hanno il davanti su +Y, opposto alle auto (-Y).
         face_gradient.inputs[1].default_value = front_color
         face_gradient.inputs[2].default_value = rear_color
 
