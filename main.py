@@ -557,8 +557,11 @@ def main():
             # General json seg
             result = apply_segmentation(seg_cfg, scene)
 
-            # 2. Override specifici City Generator / Geometry Nodes
-            geometry_override_state = apply_citygen_geometry_overrides()
+            # Gli override specifici City Generator / Geometry Nodes fanno
+            # parte soltanto del controllo di segmentazione per Cosmos.
+            geometry_override_state = None
+            if seg_name == "cosmos_seg_control":
+                geometry_override_state = apply_citygen_geometry_overrides()
 
             try:
                 nodes.clear()
@@ -573,10 +576,11 @@ def main():
 
             finally:
 
-                # Prima ripristiniamo gli override specifici
-                restore_citygen_geometry_overrides(
-                    geometry_override_state
-                )
+                # Prima ripristiniamo gli override specifici, se applicati.
+                if geometry_override_state is not None:
+                    restore_citygen_geometry_overrides(
+                        geometry_override_state
+                    )
 
                 restore_material_assignments(scene, result["material_snapshot"])
                 restore_geometry_node_material_assignments(
