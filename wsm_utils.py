@@ -588,6 +588,10 @@ def _get_or_create_nvidia_car_material(wsm_config, vehicle_class="Car"):
     face_gradient.blend_type = "MIX"
     face_gradient.inputs[1].default_value = rear_color
     face_gradient.inputs[2].default_value = front_color
+    if vehicle_class == "Cyclist":
+        # I ciclisti hanno il davanti su +Y, opposto alle auto (-Y).
+        face_gradient.inputs[1].default_value = front_color
+        face_gradient.inputs[2].default_value = rear_color
 
     camera_data = nodes.new(type="ShaderNodeCameraData")
     camera_data.name = "WSM_Car_Camera_Depth"
@@ -1059,7 +1063,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None, *, required=True):
     return changes
 
 def enable_additional_vehicle_bounding_boxes(wsm_config):
-    """Use the same local front (-Y), box geometry and cleanup as cars."""
+    """Reuse car boxes and cleanup, with class-specific material orientation."""
     changes = []
     try:
         for vehicle_class, (names, front, rear) in ADDITIONAL_WSM_VEHICLES.items():
