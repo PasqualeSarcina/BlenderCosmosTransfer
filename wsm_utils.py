@@ -39,6 +39,11 @@ BOX_EDGE_INDICES = (
     (0, 4), (1, 5), (2, 6), (3, 7),
 )
 
+ADDITIONAL_WSM_VEHICLES = {
+    "Truck": ({"truck"}, [204, 55, 0], [255, 192, 64]),
+    "Cyclist": ({"bike", "cyclist"}, [0, 80, 66], [102, 208, 198]),
+}
+
 
 def iter_nested_node_trees(root_tree):
     pending = [root_tree]
@@ -77,7 +82,7 @@ def is_car_source_node(
 
         return (
             collection is not None
-            and collection.name in car_collection_names
+            and _matches_blender_name(collection.name, car_collection_names)
         )
 
     # Parking car e Low poly car
@@ -87,7 +92,7 @@ def is_car_source_node(
 
         return (
             obj is not None
-            and obj.name in car_object_names
+            and _matches_blender_name(obj.name, car_object_names)
         )
 
     return False
@@ -352,6 +357,8 @@ def _enable_baked_car_boxes(car_material, wsm_config):
         collection for collection in bpy.data.collections
         if _matches_blender_name(collection.name, collection_names)
     ]
+    if wsm_config.get("_all_scene_vehicle_sources", False):
+        collections = [bpy.context.scene.collection]
     if not collections:
         return []
 
@@ -398,7 +405,7 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                 if _matches_blender_name(nested_collection.name, body_names):
                     add_body_objects(nested_collection)
 
-    if not matched_subcollections:
+    if not matched_subcollections or wsm_config.get("_all_scene_vehicle_sources", False):
         for collection in collections:
             for obj in collection.all_objects:
                 if obj.type != "MESH":
@@ -549,7 +556,7 @@ def _normalize_color(color):
     return (*values, 1.0)
 
 
-def _get_or_create_nvidia_car_material(wsm_config):
+def _get_or_create_nvidia_car_material(wsm_config, vehicle_class="Car"):
     front_color = _normalize_color(
         wsm_config.get(
             "car_front_color",
@@ -562,7 +569,7 @@ def _get_or_create_nvidia_car_material(wsm_config):
             DEFAULT_NVIDIA_CAR_REAR_COLOR,
         )
     )
-    material_name = "EMIT_SEG__WSM_CAR_NVIDIA"
+    material_name = f"EMIT_SEG__WSM_{vehicle_class.upper()}_NVIDIA"
     material = bpy.data.materials.get(material_name)
     if material is None:
         material = bpy.data.materials.new(name=material_name)
@@ -824,7 +831,7 @@ def _car_box_from_vertices(tree, geometry):
     return nodes, nonempty.outputs["Output"]
 
 
-def enable_car_bounding_boxes(car_material, wsm_config=None):
+def enable_car_bounding_boxes(car_material, wsm_config=None, *, required=True):
     wsm_config = wsm_config or {}
     node_group_name = wsm_config.get(
         "node_group_name",
@@ -853,7 +860,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
             car_material,
             wsm_config,
         )
-        if changes:
+        if changes or not required:
             bpy.context.view_layer.update()
             return changes
         raise RuntimeError(
@@ -1036,7 +1043,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
                 car_material,
                 wsm_config,
             )
-            if not changes:
+            if not changes and required:
                 raise RuntimeError(
                     "Nessun ramo Geometry Nodes delle car e nessuna "
                     "mesh auto baked sono stati trovati"
@@ -1050,6 +1057,33 @@ def enable_car_bounding_boxes(car_material, wsm_config=None):
 
     print(f"Rami car modificati: {len(changes)}")
     return changes
+
+def enable_additional_vehicle_bounding_boxes(wsm_config):
+    """Use the same local front (-Y), box geometry and cleanup as cars."""
+    changes = []
+    try:
+        for vehicle_class, (names, front, rear) in ADDITIONAL_WSM_VEHICLES.items():
+            vehicle_config = dict(wsm_config)
+            vehicle_config.update({
+                "car_collection_names": names,
+                "car_object_names": names,
+                "baked_car_object_names": names,
+                "baked_car_body_names": names,
+                "car_front_color": front,
+                "car_rear_color": rear,
+                "_all_scene_vehicle_sources": True,
+            })
+            material = _get_or_create_nvidia_car_material(
+                vehicle_config, vehicle_class,
+            )
+            changes.extend(enable_car_bounding_boxes(
+                material, vehicle_config, required=False,
+            ))
+    except Exception:
+        disable_car_bounding_boxes(changes)
+        raise
+    return changes
+
 
 def disable_car_bounding_boxes(changes):
     for change in reversed(changes):
@@ -1143,6 +1177,7 @@ def enter_wsm_mode(scene, wsm_config):
             car_material,
             wsm_config,
         )
+        car_changes.extend(enable_additional_vehicle_bounding_boxes(wsm_config))
         bpy.context.view_layer.update()
 
         return {
