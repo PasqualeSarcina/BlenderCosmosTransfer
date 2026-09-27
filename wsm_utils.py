@@ -32,6 +32,8 @@ WSM_CAR_GRADIENT_ATTRIBUTE = "wsm_car_longitudinal_gradient"
 DEFAULT_NVIDIA_CAR_FRONT_COLOR = [0, 46, 136]       # blu scuro - fronte
 DEFAULT_NVIDIA_CAR_REAR_COLOR = [126, 206, 255]     # azzurro chiaro - retro
 DEFAULT_NVIDIA_EDGE_COLOR = [200, 200, 200]          # grigio chiaro - bordi
+# False: colori dei box costanti con la distanza; True: attenuazione NVIDIA 0..200 m.
+WSM_DEPTH_ATTENUATION_ENABLED = False
 
 BOX_EDGE_INDICES = (
     (0, 1), (1, 2), (2, 3), (3, 0),
@@ -593,22 +595,6 @@ def _get_or_create_nvidia_car_material(wsm_config, vehicle_class="Car"):
         face_gradient.inputs[1].default_value = front_color
         face_gradient.inputs[2].default_value = rear_color
 
-    camera_data = nodes.new(type="ShaderNodeCameraData")
-    camera_data.name = "WSM_Car_Camera_Depth"
-
-    depth_fade = nodes.new(type="ShaderNodeMapRange")
-    depth_fade.name = "WSM_Car_NVIDIA_Depth_Fade"
-    depth_fade.clamp = True
-    depth_fade.inputs[1].default_value = 0.0
-    depth_fade.inputs[2].default_value = 200.0
-    depth_fade.inputs[3].default_value = 1.0
-    depth_fade.inputs[4].default_value = 0.0
-
-    face_with_depth = nodes.new(type="ShaderNodeMixRGB")
-    face_with_depth.name = "WSM_Car_Face_Depth"
-    face_with_depth.blend_type = "MULTIPLY"
-    face_with_depth.inputs[0].default_value = 1.0
-
     emission = nodes.new(type="ShaderNodeEmission")
     emission.name = "WSM_Car_NVIDIA_Emission"
     emission.inputs[1].default_value = 1.0
@@ -617,10 +603,30 @@ def _get_or_create_nvidia_car_material(wsm_config, vehicle_class="Car"):
     output.name = "WSM_Car_NVIDIA_Output"
 
     links.new(gradient_attribute.outputs["Fac"], face_gradient.inputs[0])
-    links.new(camera_data.outputs["View Z Depth"], depth_fade.inputs[0])
-    links.new(face_gradient.outputs[0], face_with_depth.inputs[1])
-    links.new(depth_fade.outputs[0], face_with_depth.inputs[2])
-    links.new(face_with_depth.outputs[0], emission.inputs[0])
+    color_socket = face_gradient.outputs[0]
+    if WSM_DEPTH_ATTENUATION_ENABLED:
+        camera_data = nodes.new(type="ShaderNodeCameraData")
+        camera_data.name = "WSM_Car_Camera_Depth"
+
+        depth_fade = nodes.new(type="ShaderNodeMapRange")
+        depth_fade.name = "WSM_Car_NVIDIA_Depth_Fade"
+        depth_fade.clamp = True
+        depth_fade.inputs[1].default_value = 0.0
+        depth_fade.inputs[2].default_value = 200.0
+        depth_fade.inputs[3].default_value = 1.0
+        depth_fade.inputs[4].default_value = 0.0
+
+        face_with_depth = nodes.new(type="ShaderNodeMixRGB")
+        face_with_depth.name = "WSM_Car_Face_Depth"
+        face_with_depth.blend_type = "MULTIPLY"
+        face_with_depth.inputs[0].default_value = 1.0
+
+        links.new(camera_data.outputs["View Z Depth"], depth_fade.inputs[0])
+        links.new(color_socket, face_with_depth.inputs[1])
+        links.new(depth_fade.outputs[0], face_with_depth.inputs[2])
+        color_socket = face_with_depth.outputs[0]
+
+    links.new(color_socket, emission.inputs[0])
     links.new(emission.outputs[0], output.inputs[0])
 
     return material
@@ -643,33 +649,36 @@ def _get_or_create_nvidia_edge_material(wsm_config):
     links = material.node_tree.links
     nodes.clear()
 
-    camera_data = nodes.new(type="ShaderNodeCameraData")
-    camera_data.name = "WSM_Car_Edge_Camera_Depth"
-
-    depth_fade = nodes.new(type="ShaderNodeMapRange")
-    depth_fade.name = "WSM_Car_Edge_Depth_Fade"
-    depth_fade.clamp = True
-    depth_fade.inputs[1].default_value = 0.0
-    depth_fade.inputs[2].default_value = 200.0
-    depth_fade.inputs[3].default_value = 1.0
-    depth_fade.inputs[4].default_value = 0.0
-
-    edge_with_depth = nodes.new(type="ShaderNodeMixRGB")
-    edge_with_depth.name = "WSM_Car_NVIDIA_Edge_Color"
-    edge_with_depth.blend_type = "MULTIPLY"
-    edge_with_depth.inputs[0].default_value = 1.0
-    edge_with_depth.inputs[1].default_value = edge_color
-
     emission = nodes.new(type="ShaderNodeEmission")
     emission.name = "WSM_Car_NVIDIA_Edge_Emission"
+    emission.inputs[0].default_value = edge_color
     emission.inputs[1].default_value = 1.0
 
     output = nodes.new(type="ShaderNodeOutputMaterial")
     output.name = "WSM_Car_NVIDIA_Edge_Output"
 
-    links.new(camera_data.outputs["View Z Depth"], depth_fade.inputs[0])
-    links.new(depth_fade.outputs[0], edge_with_depth.inputs[2])
-    links.new(edge_with_depth.outputs[0], emission.inputs[0])
+    if WSM_DEPTH_ATTENUATION_ENABLED:
+        camera_data = nodes.new(type="ShaderNodeCameraData")
+        camera_data.name = "WSM_Car_Edge_Camera_Depth"
+
+        depth_fade = nodes.new(type="ShaderNodeMapRange")
+        depth_fade.name = "WSM_Car_Edge_Depth_Fade"
+        depth_fade.clamp = True
+        depth_fade.inputs[1].default_value = 0.0
+        depth_fade.inputs[2].default_value = 200.0
+        depth_fade.inputs[3].default_value = 1.0
+        depth_fade.inputs[4].default_value = 0.0
+
+        edge_with_depth = nodes.new(type="ShaderNodeMixRGB")
+        edge_with_depth.name = "WSM_Car_NVIDIA_Edge_Color"
+        edge_with_depth.blend_type = "MULTIPLY"
+        edge_with_depth.inputs[0].default_value = 1.0
+        edge_with_depth.inputs[1].default_value = edge_color
+
+        links.new(camera_data.outputs["View Z Depth"], depth_fade.inputs[0])
+        links.new(depth_fade.outputs[0], edge_with_depth.inputs[2])
+        links.new(edge_with_depth.outputs[0], emission.inputs[0])
+
     links.new(emission.outputs[0], output.inputs[0])
 
     return material
