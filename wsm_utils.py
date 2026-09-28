@@ -33,7 +33,7 @@ DEFAULT_NVIDIA_CAR_FRONT_COLOR = [0, 46, 136]       # blu scuro - fronte
 DEFAULT_NVIDIA_CAR_REAR_COLOR = [126, 206, 255]     # azzurro chiaro - retro
 DEFAULT_NVIDIA_EDGE_COLOR = [200, 200, 200]          # grigio chiaro - bordi
 # False: colori dei box costanti con la distanza; True: attenuazione NVIDIA 0..200 m.
-WSM_DEPTH_ATTENUATION_ENABLED = False
+WSM_DEPTH_ATTENUATION_ENABLED = True
 
 BOX_EDGE_INDICES = (
     (0, 1), (1, 2), (2, 3), (3, 0),
@@ -168,7 +168,7 @@ def _mesh_bounds(mesh):
     return minimum, maximum
 
 
-def _box_mesh_geometry(bounds, padding):
+def _box_mesh_geometry(bounds, padding, cubic=False):
     vertices = []
     faces = []
 
@@ -179,6 +179,15 @@ def _box_mesh_geometry(bounds, padding):
         max_x = maximum.x + padding[0]
         max_y = maximum.y + padding[1]
         max_z = maximum.z + padding[2]
+        if cubic:
+            side = max(max_x - min_x, max_y - min_y, max_z - min_z)
+            center_x = (min_x + max_x) / 2
+            center_y = (min_y + max_y) / 2
+            center_z = (min_z + max_z) / 2
+            half_side = side / 2
+            min_x, max_x = center_x - half_side, center_x + half_side
+            min_y, max_y = center_y - half_side, center_y + half_side
+            min_z, max_z = center_z - half_side, center_z + half_side
         offset = len(vertices)
 
         vertices.extend([
@@ -267,7 +276,7 @@ def _normalize_bbox_padding(value):
     return padding
 
 
-def _update_baked_box(box_state, depsgraph, padding, edge_radius):
+def _update_baked_box(box_state, depsgraph, padding, edge_radius, cubic=False):
     source = box_state["source"]
     box_object = box_state["box_object"]
     box_mesh = box_state["box_mesh"]
@@ -287,7 +296,7 @@ def _update_baked_box(box_state, depsgraph, padding, edge_radius):
                 box_state["warned_empty"] = True
             return 0
 
-        vertices, faces = _box_mesh_geometry([bounds], padding)
+        vertices, faces = _box_mesh_geometry([bounds], padding, cubic=cubic)
         box_mesh.clear_geometry()
         box_mesh.from_pydata(vertices, [], faces)
         box_mesh.update()
@@ -354,6 +363,7 @@ def _enable_baked_car_boxes(car_material, wsm_config):
     padding = _normalize_bbox_padding(
         wsm_config.get("baked_bbox_padding", [0.0, 0.0, 0.0])
     )
+    cubic = wsm_config.get("_cubic_vehicle_box", False)
 
     collections = [
         collection for collection in bpy.data.collections
@@ -504,6 +514,7 @@ def _enable_baked_car_boxes(car_material, wsm_config):
                             current_depsgraph,
                             padding,
                             edge_radius,
+                            cubic=cubic,
                         ),
                     ))
                 return counts
@@ -525,7 +536,7 @@ def _enable_baked_car_boxes(car_material, wsm_config):
         )
         print(
             "WSM baked: "
-            f"{moving_box_count} parallelepipedi in 'body', "
+            f"{moving_box_count} box in 'body', "
             f"{parked_box_count} in 'parked body'."
         )
 
@@ -541,7 +552,7 @@ def _enable_baked_car_boxes(car_material, wsm_config):
 
     print(
         "Geometry Nodes del generatore non disponibile: "
-        f"creati parallelepipedi WSM per {len(body_objects)} mesh body "
+        f"creati box WSM per {len(body_objects)} mesh body "
         f"e nascoste {len(source_objects)} mesh auto baked."
     )
     return [change]
@@ -784,7 +795,7 @@ def _car_box_instance_zone(tree, instances_socket):
     }
 
 
-def _car_box_from_vertices(tree, geometry):
+def _car_box_from_vertices(tree, geometry, cubic=False):
     """Build one local box from evaluated surface vertices of a single car.
 
     Called inside the per-instance zone: realizing here gathers nested car
@@ -835,7 +846,23 @@ def _car_box_from_vertices(tree, geometry):
     tree.links.new(extrema.outputs["Min"], sum_ends.inputs[0])
     tree.links.new(extrema.outputs["Max"], sum_ends.inputs[1])
     tree.links.new(sum_ends.outputs["Vector"], center.inputs[0])
-    tree.links.new(size.outputs["Vector"], cube.inputs["Size"])
+    if cubic:
+        components = new("ShaderNodeSeparateXYZ", "Box_Size_Components")
+        max_xy = new("ShaderNodeMath", "Box_Max_XY")
+        max_xy.operation = "MAXIMUM"
+        max_side = new("ShaderNodeMath", "Box_Max_Side")
+        max_side.operation = "MAXIMUM"
+        uniform_size = new("ShaderNodeCombineXYZ", "Cube_Size")
+        tree.links.new(size.outputs["Vector"], components.inputs["Vector"])
+        tree.links.new(components.outputs["X"], max_xy.inputs[0])
+        tree.links.new(components.outputs["Y"], max_xy.inputs[1])
+        tree.links.new(max_xy.outputs[0], max_side.inputs[0])
+        tree.links.new(components.outputs["Z"], max_side.inputs[1])
+        for axis in ("X", "Y", "Z"):
+            tree.links.new(max_side.outputs[0], uniform_size.inputs[axis])
+        tree.links.new(uniform_size.outputs["Vector"], cube.inputs["Size"])
+    else:
+        tree.links.new(size.outputs["Vector"], cube.inputs["Size"])
     tree.links.new(cube.outputs["Mesh"], translate.inputs["Geometry"])
     tree.links.new(center.outputs["Vector"], translate.inputs["Translation"])
     tree.links.new(realize.outputs["Geometry"], count.inputs["Geometry"])
@@ -928,6 +955,7 @@ def enable_car_bounding_boxes(car_material, wsm_config=None, *, required=True):
 
                     vertex_box_nodes, box_geometry = _car_box_from_vertices(
                         tree, instance_zone["local_geometry"],
+                        cubic=wsm_config.get("_cubic_vehicle_box", False),
                     )
 
                     gradient_nodes, gradient_value = _box_local_gradient_field(tree)
@@ -1085,6 +1113,7 @@ def enable_additional_vehicle_bounding_boxes(wsm_config):
                 "car_front_color": front,
                 "car_rear_color": rear,
                 "_all_scene_vehicle_sources": True,
+                "_cubic_vehicle_box": vehicle_class == "Cyclist",
             })
             material = _get_or_create_nvidia_car_material(
                 vehicle_config, vehicle_class,
